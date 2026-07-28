@@ -1,15 +1,6 @@
-# Learning Adaptive Execution Strategies for High-Performance Blockchains
+# Learned Fine-Grained Blockchain Execution
 
-This project studies adaptive transaction execution for high-performance
-blockchains. We evaluate representative execution mechanisms under workloads
-with different contention levels, transaction costs, access patterns, and
-dependency structures.
+This project explores how learning-based methods can improve blockchain transaction execution by adapting execution strategies to workload characteristics. It aims to identify workload-dependent trade-offs among different execution mechanisms and develop a fine-grained adaptive execution engine that improves performance and resource efficiency while preserving deterministic and correct transaction outcomes.
 
-The initial goal is to characterize workload-dependent performance trade-offs
-and determine which execution dimensions may benefit from adaptive control.
+The long-term goal is to move beyond fixed or coarse-grained execution policies and enable more precise execution decisions for heterogeneous and dynamically changing workloads.
 
-CloudLab will be used for multicore execution experiments, baseline evaluation,
-workload replay, and system-level performance profiling.
-
-This is an academic systems research project and does not involve
-cryptocurrency mining or the operation of a public cryptocurrency service.
