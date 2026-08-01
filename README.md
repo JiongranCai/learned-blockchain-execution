@@ -30,5 +30,3 @@ func ExecuteBlock(
 ```
 
 The imported code is the experimental kernel, not the final framework. New policy hooks, deterministic workloads, serial differential validation, telemetry, capability guards, and fine-grained recovery will be layered around the shared safety kernel.
-
-See `docs/week1-baseline-audit.md` for the frozen provenance, reproducible verification commands, implementation audit, and known environment constraints.

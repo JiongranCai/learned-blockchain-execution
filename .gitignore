@@ -1,2 +1,15 @@
+# Local research notes, progress handoffs, and generated reports
 /references/
+/docs/
+/artifacts/
+
+# Generated experiment and diagnostic output
+/tmp/
+/results/
+/logs/
+*.test
+*.prof
+coverage.out
+
+# OS metadata
 .DS_Store
