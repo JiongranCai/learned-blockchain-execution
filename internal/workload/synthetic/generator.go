@@ -1,8 +1,6 @@
 package synthetic
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,10 +9,13 @@ import (
 
 	"github.com/crypto-org-chain/go-block-stm/internal/model"
 	"github.com/crypto-org-chain/go-block-stm/internal/runtime/flat"
-	"github.com/crypto-org-chain/go-block-stm/internal/state/memkv"
+	"github.com/crypto-org-chain/go-block-stm/internal/workload"
 )
 
-const descriptorSchema = "synthetic-workload-v1"
+const (
+	GeneratorName    = "synthetic"
+	GeneratorVersion = "synthetic-v1"
+)
 
 var (
 	ErrInvalidInitialKeys       = errors.New("initial_keys must be positive")
@@ -36,28 +37,33 @@ type Config struct {
 	FailureEvery         int    `json:"failure_every"`
 }
 
-type Scenario struct {
-	Schema       string             `json:"schema"`
-	Config       Config             `json:"config"`
-	InitialState []model.StateEntry `json:"initial_state"`
-	Blocks       []model.Block      `json:"blocks"`
-}
-
-func Generate(config Config) (Scenario, error) {
+func Generate(config Config) (workload.Artifact, error) {
 	if err := validateConfig(config); err != nil {
-		return Scenario{}, err
+		return workload.Artifact{}, err
+	}
+	configDescriptor, err := json.Marshal(config)
+	if err != nil {
+		return workload.Artifact{}, err
 	}
 
 	rng := rand.New(rand.NewSource(config.Seed))
-	scenario := Scenario{
-		Schema:       descriptorSchema,
-		Config:       config,
-		InitialState: make([]model.StateEntry, 0, config.InitialKeys),
-		Blocks:       make([]model.Block, 0, config.BlockCount),
+	artifact := workload.Artifact{
+		SchemaVersion: workload.ArtifactSchemaVersion,
+		Generator: workload.GeneratorDescriptor{
+			Name:    GeneratorName,
+			Version: GeneratorVersion,
+			Seed:    config.Seed,
+			Config:  configDescriptor,
+		},
+		InitialState:           make([]model.StateEntry, 0, config.InitialKeys),
+		OrderedBlocks:          make([]model.Block, 0, config.BlockCount),
+		LogicalArrivalSchedule: make([]workload.LogicalArrival, 0),
+		GroundTruth:            make([]workload.TransactionGroundTruth, 0),
+		EngineVisibleMetadata:  make([]workload.MetadataRecord, 0),
 	}
 
 	for i := 0; i < config.InitialKeys; i++ {
-		scenario.InitialState = append(scenario.InitialState, model.StateEntry{
+		artifact.InitialState = append(artifact.InitialState, model.StateEntry{
 			Key:   stateKey(i),
 			Value: flat.EncodeInt64(int64(rng.Intn(10_000))),
 		})
@@ -71,6 +77,7 @@ func Generate(config Config) (Scenario, error) {
 			Transactions: make([]model.Transaction, 0, config.TransactionsPerBlock),
 		}
 		for transactionIndex := 0; transactionIndex < config.TransactionsPerBlock; transactionIndex++ {
+			transactionID := fmt.Sprintf("tx-%06d-%06d", blockIndex, transactionIndex)
 			readKey := stateKey(rng.Intn(config.KeySpace))
 			writeKey := stateKey(rng.Intn(config.KeySpace))
 			delta := int64(rng.Intn(11) - 5)
@@ -91,8 +98,8 @@ func Generate(config Config) (Scenario, error) {
 					},
 				},
 			}
-			globalTransaction++
-			if config.FailureEvery > 0 && globalTransaction%config.FailureEvery == 0 {
+			willFail := config.FailureEvery > 0 && (globalTransaction+1)%config.FailureEvery == 0
+			if willFail {
 				instructions = append(instructions, model.Instruction{
 					Op:        model.OpFailIf,
 					Condition: model.Condition{Kind: model.ConditionAlways},
@@ -105,34 +112,51 @@ func Generate(config Config) (Scenario, error) {
 					Base: model.Register("value"),
 				},
 			})
+			for instructionIndex := range instructions {
+				instructions[instructionIndex].ID = operationID(blockIndex, transactionIndex, instructionIndex)
+			}
 
 			block.Transactions = append(block.Transactions, model.Transaction{
-				ID:       fmt.Sprintf("tx-%06d-%06d", blockIndex, transactionIndex),
+				ID:       transactionID,
 				MaxUnits: config.TransactionMaxUnits,
 				Program:  model.Program{Instructions: instructions},
 			})
+
+			actualOperationCount := len(instructions)
+			expectedStatus := model.TxStatusSuccess
+			if willFail {
+				actualOperationCount-- // RETURN is structurally present but unreachable.
+				expectedStatus = model.TxStatusFailed
+			}
+			operationPath := make([]string, 0, actualOperationCount)
+			for _, instruction := range instructions[:actualOperationCount] {
+				operationPath = append(operationPath, instruction.ID)
+			}
+			artifact.GroundTruth = append(artifact.GroundTruth, workload.TransactionGroundTruth{
+				TransactionID:  transactionID,
+				ExpectedStatus: expectedStatus,
+				OperationPath:  operationPath,
+				Accesses: []workload.GroundTruthAccess{
+					{OperationID: instructions[0].ID, Mode: workload.AccessRead, Key: cloneBytes(readKey)},
+					{OperationID: instructions[2].ID, Mode: workload.AccessWrite, Key: cloneBytes(writeKey)},
+				},
+				Branches: make([]workload.BranchOutcome, 0),
+			})
+			artifact.LogicalArrivalSchedule = append(artifact.LogicalArrivalSchedule, workload.LogicalArrival{
+				Sequence:      uint64(globalTransaction),
+				LogicalTime:   uint64(globalTransaction),
+				BlockID:       block.ID,
+				TransactionID: transactionID,
+			})
+			globalTransaction++
 		}
-		scenario.Blocks = append(scenario.Blocks, block)
+		artifact.OrderedBlocks = append(artifact.OrderedBlocks, block)
 	}
 
-	return scenario, nil
-}
-
-func (s Scenario) Descriptor() ([]byte, error) {
-	return json.Marshal(s)
-}
-
-func (s Scenario) DescriptorDigest() (string, error) {
-	descriptor, err := s.Descriptor()
-	if err != nil {
-		return "", err
+	if err := artifact.Seal(); err != nil {
+		return workload.Artifact{}, err
 	}
-	digest := sha256.Sum256(descriptor)
-	return hex.EncodeToString(digest[:]), nil
-}
-
-func (s Scenario) NewState() (*memkv.Store, error) {
-	return memkv.FromEntries(s.InitialState)
+	return artifact, nil
 }
 
 func validateConfig(config Config) error {
@@ -165,4 +189,12 @@ func validateConfig(config Config) error {
 
 func stateKey(index int) []byte {
 	return []byte(fmt.Sprintf("key-%08d", index))
+}
+
+func operationID(blockIndex, transactionIndex, instructionIndex int) string {
+	return fmt.Sprintf("op-%06d-%06d-%03d", blockIndex, transactionIndex, instructionIndex)
+}
+
+func cloneBytes(value []byte) []byte {
+	return append([]byte(nil), value...)
 }

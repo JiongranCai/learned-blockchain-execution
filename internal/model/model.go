@@ -64,6 +64,10 @@ type Condition struct {
 }
 
 type Instruction struct {
+	// ID is the stable logical operation ID used by workload artifacts and
+	// traces. For branch/call operations it is also the stable branch/call ID.
+	// It is metadata and does not alter instruction semantics.
+	ID           string     `json:"id,omitempty"`
 	Op           Opcode     `json:"op"`
 	Key          []byte     `json:"key,omitempty"`
 	Register     string     `json:"register,omitempty"`

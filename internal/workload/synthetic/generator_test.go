@@ -2,8 +2,6 @@ package synthetic_test
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"math"
 	"reflect"
@@ -12,8 +10,11 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/engine/serial"
 	"github.com/crypto-org-chain/go-block-stm/internal/model"
 	"github.com/crypto-org-chain/go-block-stm/internal/state/memkv"
+	"github.com/crypto-org-chain/go-block-stm/internal/workload"
 	"github.com/crypto-org-chain/go-block-stm/internal/workload/synthetic"
 )
+
+const goldenArtifactHash = "6b71316d4076a8d0e27f078e6c52a2f9a042047e88c34ee2ea63792fafbe609d"
 
 func TestGenerateIsByteDeterministicAndSeedSensitive(t *testing.T) {
 	config := testConfig()
@@ -36,10 +37,14 @@ func TestGenerateIsByteDeterministicAndSeedSensitive(t *testing.T) {
 	if string(firstDescriptor) != string(secondDescriptor) {
 		t.Fatalf("same seed produced different descriptors:\n%s\n%s", firstDescriptor, secondDescriptor)
 	}
-	wantDigestBytes := sha256.Sum256(firstDescriptor)
-	wantDigest := hex.EncodeToString(wantDigestBytes[:])
-	if got, err := first.DescriptorDigest(); err != nil || got != wantDigest {
-		t.Fatalf("unexpected descriptor digest: got %q err=%v want %q", got, err, wantDigest)
+	if first.SchemaVersion != workload.ArtifactSchemaVersion || first.Generator.Version != synthetic.GeneratorVersion {
+		t.Fatalf("unexpected artifact identity: %#v", first)
+	}
+	if got, err := first.DescriptorDigest(); err != nil || got != first.CanonicalHash || len(got) != 64 {
+		t.Fatalf("unexpected descriptor digest: got %q err=%v field=%q", got, err, first.CanonicalHash)
+	}
+	if first.CanonicalHash != goldenArtifactHash {
+		t.Fatalf("synthetic-v1 changed without a version bump: got %s want %s", first.CanonicalHash, goldenArtifactHash)
 	}
 
 	config.Seed++
@@ -56,22 +61,22 @@ func TestGenerateIsByteDeterministicAndSeedSensitive(t *testing.T) {
 	}
 }
 
-func TestGeneratedScenarioHasDeterministicSerialResults(t *testing.T) {
-	scenario, err := synthetic.Generate(testConfig())
+func TestGeneratedArtifactHasDeterministicSerialResults(t *testing.T) {
+	artifact, err := synthetic.Generate(testConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstState, err := scenario.NewState()
+	firstState, err := artifact.NewState()
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondState, err := scenario.NewState()
+	secondState, err := artifact.NewState()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	firstResults := executeScenario(t, scenario.Blocks, firstState)
-	secondResults := executeScenario(t, scenario.Blocks, secondState)
+	firstResults := executeArtifact(t, artifact.OrderedBlocks, firstState)
+	secondResults := executeArtifact(t, artifact.OrderedBlocks, secondState)
 	if !reflect.DeepEqual(firstResults, secondResults) {
 		t.Fatalf("same generated scenario produced different serial results:\nfirst: %#v\nsecond: %#v", firstResults, secondResults)
 	}
@@ -80,11 +85,17 @@ func TestGeneratedScenarioHasDeterministicSerialResults(t *testing.T) {
 	}
 
 	failed := 0
+	groundTruthIndex := 0
 	for _, block := range firstResults {
 		if block.Digest == "" || block.Digest != model.CanonicalDigest(block) {
 			t.Fatalf("invalid result digest for %s: %q", block.BlockID, block.Digest)
 		}
 		for _, transaction := range block.Transactions {
+			truth := artifact.GroundTruth[groundTruthIndex]
+			groundTruthIndex++
+			if transaction.TransactionID != truth.TransactionID || transaction.Status != truth.ExpectedStatus {
+				t.Fatalf("ground truth/result mismatch: truth=%#v result=%#v", truth, transaction)
+			}
 			if transaction.Status == model.TxStatusFailed {
 				failed++
 				if transaction.ErrorCode != "synthetic_failure" || transaction.Writes != nil {
@@ -95,6 +106,51 @@ func TestGeneratedScenarioHasDeterministicSerialResults(t *testing.T) {
 	}
 	if failed != 6 {
 		t.Fatalf("expected 6 deterministic injected failures, got %d", failed)
+	}
+}
+
+func TestGeneratedArtifactFreezesLogicalIDsAndInformationBoundary(t *testing.T) {
+	artifact, err := synthetic.Generate(testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	transactionCount := testConfig().BlockCount * testConfig().TransactionsPerBlock
+	if len(artifact.LogicalArrivalSchedule) != transactionCount || len(artifact.GroundTruth) != transactionCount {
+		t.Fatalf("artifact does not cover every transaction: arrivals=%d truth=%d transactions=%d",
+			len(artifact.LogicalArrivalSchedule), len(artifact.GroundTruth), transactionCount)
+	}
+	if len(artifact.EngineVisibleMetadata) != 0 {
+		t.Fatalf("baseline generator leaked metadata to engine: %#v", artifact.EngineVisibleMetadata)
+	}
+
+	operationIDs := make(map[string]struct{})
+	for _, block := range artifact.OrderedBlocks {
+		for _, transaction := range block.Transactions {
+			for _, instruction := range transaction.Program.Instructions {
+				if instruction.ID == "" {
+					t.Fatalf("transaction %s contains an operation without a stable id", transaction.ID)
+				}
+				if _, exists := operationIDs[instruction.ID]; exists {
+					t.Fatalf("duplicate operation id %s", instruction.ID)
+				}
+				operationIDs[instruction.ID] = struct{}{}
+			}
+		}
+	}
+
+	input, err := artifact.ExecutionInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(input.Metadata) != 0 || input.ArtifactHash != artifact.CanonicalHash {
+		t.Fatalf("unexpected baseline execution input: %#v", input)
+	}
+	if !reflect.DeepEqual(input.OrderedBlocks, artifact.OrderedBlocks) || !reflect.DeepEqual(input.LogicalArrivalSchedule, artifact.LogicalArrivalSchedule) {
+		t.Fatal("execution input changed canonical workload order")
+	}
+	input.OrderedBlocks[0].ID = "mutated"
+	if artifact.OrderedBlocks[0].ID == "mutated" {
+		t.Fatal("execution input aliases the audit artifact")
 	}
 }
 
@@ -127,7 +183,7 @@ func TestGenerateRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
-func executeScenario(t *testing.T, blocks []model.Block, storage *memkv.Store) []model.BlockResult {
+func executeArtifact(t *testing.T, blocks []model.Block, storage *memkv.Store) []model.BlockResult {
 	t.Helper()
 	engine := serial.New(nil)
 	results := make([]model.BlockResult, 0, len(blocks))

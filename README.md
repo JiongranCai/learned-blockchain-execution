@@ -39,17 +39,21 @@ The Week 2 reference path is implemented under `internal/` without modifying the
 - `state/memkv` provides cloned byte ownership, key-sorted snapshots, and transaction-local overlays;
 - `runtime/flat` executes deterministic integer programs with reads, writes, deletes, fixed-cost compute, conditions, jumps, explicit failure, and return;
 - `engine/serial` executes transactions in preset order and is the correctness oracle for later parallel engines;
-- `workload/synthetic` materializes the complete initial state and ordered blocks from a seed, with a byte-stable JSON descriptor.
+- `workload` defines the strict, hash-sealed `WorkloadArtifact v1` and its restricted engine view;
+- `workload/synthetic` materializes initial state, ordered blocks, logical arrivals, stable operation IDs, and audit ground truth from a seed.
 
 The frozen execution contract is:
 
 - state keys are arbitrary bytes; runtime values are signed 64-bit integers encoded as exactly eight big-endian bytes;
 - a missing read yields integer zero with `Exists=false`; malformed stored values fail with `invalid_state`;
 - each instruction costs one unit and `compute(n)` costs `n+1`; checked arithmetic, gas exhaustion, and invalid programs have distinct stable statuses/codes;
+- compute work updates the result-visible `ComputeDigest`, which is covered by the canonical result digest and prevents dead-work elimination;
 - transactions read their own writes, and the last operation on a key wins within that transaction;
 - only `success` commits the transaction overlay; explicit failure, invalid program/state, arithmetic failure, and out-of-gas retain accounting/reads but publish no writes;
 - semantic transaction failure does not abort the block; infrastructure cancellation aborts the block and publishes none of that block's state;
 - state snapshots and write sets are byte-key sorted, while transaction/read/event order remains execution order; the canonical SHA-256 digest excludes its own `Digest` field.
+
+Every generated workload is sealed as `workload-artifact-v1`. Its canonical hash covers generator name/version/config/seed, initial state, ordered programs, logical arrival schedule, stable IDs, audit-only actual access/path metadata, and engine-visible metadata records. Candidate execution receives an `ExecutionInput`, which cannot represent ground truth and exposes metadata only when its declared source is explicitly allowed. Descriptor parsing rejects unknown fields, stale hashes, malformed metadata size/hash, and inconsistent logical IDs before execution.
 
 Run the macOS correctness gate from the repository root:
 
