@@ -17,15 +17,15 @@ The frozen upstream module:
 - is licensed under Apache License 2.0 and declares Go 1.21.
 
 ```go
-type ExecuteFn func(TxnIndex, MultiStore)
+type TxExecutor func(TxnIndex, MultiStore)
 
 func ExecuteBlock(
 	ctx context.Context,
 	blockSize int,
-	stores []storetypes.StoreKey,
+	stores map[storetypes.StoreKey]int,
 	storage MultiStore,
 	executors int,
-	executeFn ExecuteFn,
+	txExecutor TxExecutor,
 ) error
 ```
 
@@ -55,6 +55,20 @@ The frozen execution contract is:
 
 Every generated workload is sealed as `workload-artifact-v1`. Its canonical hash covers generator name/version/config/seed, initial state, ordered programs, logical arrival schedule, stable IDs, audit-only actual access/path metadata, and engine-visible metadata records. Candidate execution receives an `ExecutionInput`, which cannot represent ground truth and exposes metadata only when its declared source is explicitly allowed. Descriptor parsing rejects unknown fields, stale hashes, malformed metadata size/hash, and inconsistent logical IDs before execution.
 
+## Block-STM adapter and fixed policies
+
+Week 3 adds the unified execution seam without changing the frozen root-level scheduler:
+
+- `internal/engine` defines the common engine/run configuration and atomic state-publication contract;
+- `internal/control` registers all 19 first-version events, their unique typed dispatch keys, action schemas, trust classes, capabilities, and logical traces;
+- `internal/policy` groups macro, transaction, runtime, and recovery hooks behind one immutable policy identity;
+- `internal/policy/fixed` provides explicit `SerialPreset` and `BlockSTMPreset` decisions for every hook;
+- `internal/engine/blockstm` adapts the flat runtime and byte state to the original Block-STM MVCC/scheduler API, publishing only a completed canonical block snapshot.
+
+The adapter preserves missing versus existing empty values with a private value frame. Failed speculative executions never publish their overlay writes. Final transaction results remain in preset order, and validation-driven reexecution is represented by increasing incarnations plus paired `VALIDATION_FAIL`/`REPLAY_START` events. Kernel-internal callbacks that the frozen `TxExecutor` API cannot expose—such as the precise `READ_ESTIMATE`, conflict, worker-idle, and queue-pressure events—are declared unavailable with reasons instead of being fabricated.
+
+The differential suite compares the complete canonical `BlockResult` and final state, including ordered transaction status, errors, units, reads, writes, return values, runtime events, compute digest, and block digest. It covers rollback, delete, malformed state, out-of-gas, arithmetic overflow, branches, hot-key conflicts, multiple seeds, and executor counts.
+
 Run the macOS correctness gate from the repository root:
 
 ```sh
@@ -67,6 +81,14 @@ Repeat the determinism-sensitive packages with:
 
 ```sh
 go test -count=20 ./internal/...
+```
+
+To inspect the Week 3 gates directly:
+
+```sh
+go test -count=1 -v ./internal/engine/blockstm
+go test -count=1 -v ./internal/control ./internal/policy ./internal/policy/fixed
+go test -race -count=1 ./internal/engine/blockstm ./internal/control ./internal/policy
 ```
 
 `scripts/verify_upstream_baseline.sh` additionally proves that the frozen root-level go-block-stm kernel is unchanged and reruns the full baseline suite. Performance, scaling, affinity, and NUMA measurements are intentionally deferred to Linux; macOS results are correctness checks only.

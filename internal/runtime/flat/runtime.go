@@ -3,10 +3,13 @@ package flat
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"math"
 	"math/bits"
 
+	"github.com/crypto-org-chain/go-block-stm/internal/control"
 	"github.com/crypto-org-chain/go-block-stm/internal/model"
+	"github.com/crypto-org-chain/go-block-stm/internal/policy"
 	"github.com/crypto-org-chain/go-block-stm/internal/state"
 )
 
@@ -86,8 +89,30 @@ func (r *Runtime) Execute(
 	tx model.Transaction,
 	view *state.Overlay,
 ) model.TxResult {
+	return r.ExecuteWithHooks(ctx, control.TxContext{
+		TransactionID: tx.ID,
+		TxIndex:       index,
+	}, tx, view, policy.RuntimeDefaults{})
+}
+
+// ExecuteWithHooks runs the same deterministic semantics through the shared
+// typed runtime-policy seam. Hooks may observe/select the sole Week 3 baseline
+// access/branch actions but cannot directly mutate state.
+func (r *Runtime) ExecuteWithHooks(
+	ctx context.Context,
+	execution control.TxContext,
+	tx model.Transaction,
+	view *state.Overlay,
+	hooks policy.RuntimeHooks,
+) model.TxResult {
+	if hooks == nil {
+		hooks = policy.RuntimeDefaults{}
+	}
+	if execution.TransactionID == "" {
+		execution.TransactionID = tx.ID
+	}
 	result := model.TxResult{
-		Index:         index,
+		Index:         execution.TxIndex,
 		TransactionID: tx.ID,
 		ComputeDigest: initialComputeDigest,
 	}
@@ -105,6 +130,7 @@ func (r *Runtime) Execute(
 
 	registers := make(map[string]registerValue)
 	pc := 0
+	ordinal := execution.Ordinal
 	for pc < len(tx.Program.Instructions) {
 		if cancelled(ctx) {
 			result.Status = model.TxStatusCancelled
@@ -124,6 +150,15 @@ func (r *Runtime) Execute(
 
 		switch instruction.Op {
 		case model.OpRead:
+			ordinal++
+			hookContext := execution
+			hookContext.Ordinal = ordinal
+			hooks.BeforeRead(control.AccessContext{
+				TxContext:      hookContext,
+				OperationID:    operationID(tx.ID, instruction.ID, pc),
+				ProgramCounter: pc,
+				Key:            cloneBytes(instruction.Key),
+			})
 			raw, exists := view.Get(instruction.Key)
 			value := int64(0)
 			if exists {
@@ -144,6 +179,15 @@ func (r *Runtime) Execute(
 			pc++
 
 		case model.OpWrite:
+			ordinal++
+			hookContext := execution
+			hookContext.Ordinal = ordinal
+			hooks.BeforeWrite(control.AccessContext{
+				TxContext:      hookContext,
+				OperationID:    operationID(tx.ID, instruction.ID, pc),
+				ProgramCounter: pc,
+				Key:            cloneBytes(instruction.Key),
+			})
 			value, code := evaluateExpression(instruction.Expression, registers)
 			if code != "" {
 				setEvaluationError(&result, code)
@@ -153,6 +197,15 @@ func (r *Runtime) Execute(
 			pc++
 
 		case model.OpDelete:
+			ordinal++
+			hookContext := execution
+			hookContext.Ordinal = ordinal
+			hooks.BeforeWrite(control.AccessContext{
+				TxContext:      hookContext,
+				OperationID:    operationID(tx.ID, instruction.ID, pc),
+				ProgramCounter: pc,
+				Key:            cloneBytes(instruction.Key),
+			})
 			view.Delete(instruction.Key)
 			pc++
 
@@ -188,6 +241,16 @@ func (r *Runtime) Execute(
 				setEvaluationError(&result, code)
 				return result
 			}
+			ordinal++
+			hookContext := execution
+			hookContext.Ordinal = ordinal
+			hooks.OnBranch(control.BranchContext{
+				TxContext:      hookContext,
+				BranchID:       operationID(tx.ID, instruction.ID, pc),
+				ProgramCounter: pc,
+				Taken:          matched,
+				Target:         instruction.Target,
+			})
 			if matched {
 				pc = instruction.Target
 			} else {
@@ -210,6 +273,13 @@ func (r *Runtime) Execute(
 	result.Status = model.TxStatusSuccess
 	result.Writes = view.Changes()
 	return result
+}
+
+func operationID(transactionID, instructionID string, programCounter int) string {
+	if instructionID != "" {
+		return instructionID
+	}
+	return fmt.Sprintf("%s/op-%d", transactionID, programCounter)
 }
 
 func instructionCost(instruction model.Instruction) (uint64, bool) {

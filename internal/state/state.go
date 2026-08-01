@@ -24,6 +24,8 @@ type Snapshotter interface {
 type Store interface {
 	Mutable
 	Snapshotter
+	// Replace atomically publishes a complete, cloned state snapshot.
+	Replace([]model.StateEntry) error
 }
 
 type overlayValue struct {

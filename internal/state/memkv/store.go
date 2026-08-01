@@ -82,17 +82,25 @@ func (s *Store) Clone() *Store {
 	return clone
 }
 
-// ReplaceFrom atomically replaces the receiver with a cloned snapshot.
-func (s *Store) ReplaceFrom(source *Store) {
-	replacement := source.Snapshot()
-	next := make(map[string][]byte, len(replacement))
-	for _, entry := range replacement {
-		next[string(entry.Key)] = cloneBytes(entry.Value)
+// Replace atomically replaces the receiver with cloned entries. Duplicate keys
+// are rejected before the current state is changed.
+func (s *Store) Replace(entries []model.StateEntry) error {
+	replacement, err := FromEntries(entries)
+	if err != nil {
+		return err
 	}
 
 	s.mu.Lock()
-	s.data = next
+	s.data = replacement.data
 	s.mu.Unlock()
+	return nil
+}
+
+// ReplaceFrom atomically replaces the receiver with a cloned snapshot.
+func (s *Store) ReplaceFrom(source *Store) {
+	if err := s.Replace(source.Snapshot()); err != nil {
+		panic("memkv snapshot unexpectedly contains duplicate keys")
+	}
 }
 
 func cloneBytes(value []byte) []byte {

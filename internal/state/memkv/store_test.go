@@ -74,3 +74,23 @@ func TestFromEntriesRejectsDuplicateKeys(t *testing.T) {
 		t.Fatalf("expected ErrDuplicateKey, got %v", err)
 	}
 }
+
+func TestReplaceRejectsDuplicatesWithoutPublishing(t *testing.T) {
+	store, err := memkv.FromEntries([]model.StateEntry{
+		{Key: []byte("stable"), Value: []byte("before")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := store.Snapshot()
+	err = store.Replace([]model.StateEntry{
+		{Key: []byte("same"), Value: []byte("one")},
+		{Key: []byte("same"), Value: []byte("two")},
+	})
+	if !errors.Is(err, memkv.ErrDuplicateKey) {
+		t.Fatalf("expected ErrDuplicateKey, got %v", err)
+	}
+	if got := store.Snapshot(); !reflect.DeepEqual(got, before) {
+		t.Fatalf("failed replacement changed state: got %#v want %#v", got, before)
+	}
+}

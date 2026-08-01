@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	engineapi "github.com/crypto-org-chain/go-block-stm/internal/engine"
 	"github.com/crypto-org-chain/go-block-stm/internal/engine/serial"
 	"github.com/crypto-org-chain/go-block-stm/internal/model"
 	"github.com/crypto-org-chain/go-block-stm/internal/state/memkv"
@@ -188,7 +189,7 @@ func executeArtifact(t *testing.T, blocks []model.Block, storage *memkv.Store) [
 	engine := serial.New(nil)
 	results := make([]model.BlockResult, 0, len(blocks))
 	for _, block := range blocks {
-		result, err := engine.ExecuteBlock(context.Background(), block, storage)
+		result, _, err := engine.ExecuteBlock(context.Background(), block, storage, engineapi.RunConfig{Executors: 1})
 		if err != nil {
 			t.Fatalf("execute %s: %v", block.ID, err)
 		}
