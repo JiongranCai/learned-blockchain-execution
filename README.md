@@ -30,3 +30,39 @@ func ExecuteBlock(
 ```
 
 The imported code is the experimental kernel, not the final framework. New policy hooks, deterministic workloads, serial differential validation, telemetry, capability guards, and fine-grained recovery will be layered around the shared safety kernel.
+
+## Serial semantics
+
+The Week 2 reference path is implemented under `internal/` without modifying the frozen upstream kernel:
+
+- `model` defines typed blocks, transactions, flat instructions, results, and the schema-versioned canonical digest;
+- `state/memkv` provides cloned byte ownership, key-sorted snapshots, and transaction-local overlays;
+- `runtime/flat` executes deterministic integer programs with reads, writes, deletes, fixed-cost compute, conditions, jumps, explicit failure, and return;
+- `engine/serial` executes transactions in preset order and is the correctness oracle for later parallel engines;
+- `workload/synthetic` materializes the complete initial state and ordered blocks from a seed, with a byte-stable JSON descriptor.
+
+The frozen execution contract is:
+
+- state keys are arbitrary bytes; runtime values are signed 64-bit integers encoded as exactly eight big-endian bytes;
+- a missing read yields integer zero with `Exists=false`; malformed stored values fail with `invalid_state`;
+- each instruction costs one unit and `compute(n)` costs `n+1`; checked arithmetic, gas exhaustion, and invalid programs have distinct stable statuses/codes;
+- transactions read their own writes, and the last operation on a key wins within that transaction;
+- only `success` commits the transaction overlay; explicit failure, invalid program/state, arithmetic failure, and out-of-gas retain accounting/reads but publish no writes;
+- semantic transaction failure does not abort the block; infrastructure cancellation aborts the block and publishes none of that block's state;
+- state snapshots and write sets are byte-key sorted, while transaction/read/event order remains execution order; the canonical SHA-256 digest excludes its own `Digest` field.
+
+Run the macOS correctness gate from the repository root:
+
+```sh
+go test -count=1 ./...
+go test -race -count=1 ./...
+go vet ./...
+```
+
+Repeat the determinism-sensitive packages with:
+
+```sh
+go test -count=20 ./internal/...
+```
+
+`scripts/verify_upstream_baseline.sh` additionally proves that the frozen root-level go-block-stm kernel is unchanged and reruns the full baseline suite. Performance, scaling, affinity, and NUMA measurements are intentionally deferred to Linux; macOS results are correctness checks only.
