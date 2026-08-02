@@ -3,8 +3,11 @@ package policy
 import "github.com/crypto-org-chain/go-block-stm/internal/control"
 
 type Identity struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Name               string `json:"name"`
+	Version            string `json:"version"`
+	FeatureSource      string `json:"feature_source,omitempty"`
+	ObservationVersion string `json:"observation_version,omitempty"`
+	TableVersion       string `json:"table_version,omitempty"`
 }
 
 type MacroPolicy interface {

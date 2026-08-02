@@ -92,3 +92,27 @@ go test -race -count=1 ./internal/engine/blockstm ./internal/control ./internal/
 ```
 
 `scripts/verify_upstream_baseline.sh` additionally proves that the frozen root-level go-block-stm kernel is unchanged and reruns the full baseline suite. Performance, scaling, affinity, and NUMA measurements are intentionally deferred to Linux; macOS results are correctness checks only.
+
+## Benchmark runner and telemetry
+
+Week 4 adds a strict `experiment-matrix-v1` runner under `cmd/bench`. Build the binary so Go embeds the Git revision and dirty-worktree bit, then run the smoke matrix:
+
+```sh
+go build -trimpath -o /tmp/blockchain-execution-bench ./cmd/bench
+/tmp/blockchain-execution-bench validate -config configs/experiments/week4-smoke.json
+/tmp/blockchain-execution-bench run -config configs/experiments/week4-smoke.json
+```
+
+`validate` executes the serial oracle and every configured candidate on independent states, compares the complete canonical block results, and writes a validation bundle bound to the binary commit, config hash, statistical protocol, workload hash, and expected result digest. `run` refuses a stale bundle and executes only a validated candidate. Every warmup and measurement is launched in a fresh process, while workload loading/generation, state construction, canonical digesting, result comparison, JSON encoding, and trace output remain outside the timed interval.
+
+Each run emits `benchmark-run-v1` JSONL with hardware/runtime provenance, process ID, Linux allowed CPU/memory-node lists and governor, block latencies, goodput, useful/re-executed/discarded work, incarnation attempts, action/fallback counters, policy decision cost, memory high-water mark, capability availability, and explicit unavailable metrics. `action-trace-v1` records stable targets, trust class, feature source, observation version, policy-table version, action, and lookup/dispatch duration. Trace modes are `detailed`, `counters`, and `off`; formal timing uses `counters`, while `detailed` is a diagnostic/action-trace mode. Matched instrumented/off cases produce a `telemetry-ablation-v1` record without changing canonical results.
+
+The smoke outputs are generated under `results/` and are intentionally ignored by Git. They are not paper data. Formal runs require Linux, a clean VCS-stamped binary, the frozen minimum repetitions in `configs/statistical/protocol-v1.json`, and explicit affinity, NUMA, and page-cache controls. The formal template is deliberately rejected until its `REPLACE_WITH_...` fields are frozen for the target server.
+
+On an already provisioned Linux host, the complete correctness/build/runner smoke is:
+
+```sh
+./scripts/run_week4_linux_smoke.sh
+```
+
+The script uses `GOPROXY=off` and never installs tools or dependencies; a missing Go toolchain, race prerequisite, or module cache is reported as an environment failure.

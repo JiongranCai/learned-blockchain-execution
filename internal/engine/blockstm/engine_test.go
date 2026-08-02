@@ -259,6 +259,11 @@ func TestConflictReexecutionIsExposedThroughRecoveryHooks(t *testing.T) {
 	if len(replays) == 0 {
 		t.Fatalf("reexecution hooks were not observed: trace=%#v", trace.Events)
 	}
+	if !trace.WorkAvailable || trace.Work.ExecutionAttempts <= uint64(len(block.Transactions)) ||
+		trace.Work.ReexecutionAttempts == 0 || trace.Work.ReexecutedExecutionUnits == 0 ||
+		trace.Work.DiscardedExecutionUnits != trace.Work.ReexecutedExecutionUnits {
+		t.Fatalf("reexecution work was not accounted: %#v", trace.Work)
+	}
 	for incarnation, count := range replays {
 		if incarnation == 0 || failures[incarnation-1] != count {
 			t.Fatalf("reexecution hooks were not paired by incarnation: failures=%v replays=%v", failures, replays)

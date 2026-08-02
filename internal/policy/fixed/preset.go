@@ -5,7 +5,7 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/policy"
 )
 
-const presetVersion = "fixed-preset-v1"
+const PresetVersion = "fixed-preset-v1"
 
 type Preset struct {
 	identity policy.Identity
@@ -17,17 +17,29 @@ var _ policy.Policy = (*Preset)(nil)
 
 func NewSerialPreset() *Preset {
 	return &Preset{
-		identity: policy.Identity{Name: "SerialPreset", Version: presetVersion},
-		lane:     control.LaneSerial,
-		wait:     control.WaitNone,
+		identity: policy.Identity{
+			Name:               "SerialPreset",
+			Version:            PresetVersion,
+			FeatureSource:      "fixed_config",
+			ObservationVersion: "none",
+			TableVersion:       PresetVersion,
+		},
+		lane: control.LaneSerial,
+		wait: control.WaitNone,
 	}
 }
 
 func NewBlockSTMPreset() *Preset {
 	return &Preset{
-		identity: policy.Identity{Name: "BlockSTMPreset", Version: presetVersion},
-		lane:     control.LaneOptimistic,
-		wait:     control.WaitLogicalPredecessor,
+		identity: policy.Identity{
+			Name:               "BlockSTMPreset",
+			Version:            PresetVersion,
+			FeatureSource:      "fixed_config",
+			ObservationVersion: "none",
+			TableVersion:       PresetVersion,
+		},
+		lane: control.LaneOptimistic,
+		wait: control.WaitLogicalPredecessor,
 	}
 }
 

@@ -56,3 +56,28 @@ func TestRecorderSnapshotIsConcurrentAndLogicallyStable(t *testing.T) {
 		t.Fatal("Snapshot exposed recorder storage")
 	}
 }
+
+func TestRecorderSupportsDetailedCountersAndOffModes(t *testing.T) {
+	record := control.EventRecord{
+		Event:              control.EventRetryLimit,
+		Action:             "serial",
+		DecisionDurationNS: 7,
+	}
+
+	counters := control.NewRecorder(control.TraceCounters)
+	counters.Record(record)
+	if events := counters.Snapshot(); len(events) != 0 {
+		t.Fatalf("counter mode retained detailed events: %#v", events)
+	}
+	actions, fallbacks, duration := counters.Summary()
+	if len(actions) != 1 || actions[0].Count != 1 || len(fallbacks) != 1 || duration != 7 {
+		t.Fatalf("unexpected counter summary: actions=%#v fallbacks=%#v duration=%d", actions, fallbacks, duration)
+	}
+
+	off := control.NewRecorder(control.TraceOff)
+	off.Record(record)
+	actions, fallbacks, duration = off.Summary()
+	if len(off.Snapshot()) != 0 || len(actions) != 0 || len(fallbacks) != 0 || duration != 0 {
+		t.Fatalf("off mode retained telemetry: actions=%#v fallbacks=%#v duration=%d", actions, fallbacks, duration)
+	}
+}

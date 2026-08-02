@@ -70,7 +70,11 @@ func (e *Engine) ExecuteBlock(
 	if selectedPolicy == nil {
 		selectedPolicy = fixed.NewSerialPreset()
 	}
-	dispatcher, err := policy.NewDispatcher(selectedPolicy)
+	traceMode, err := engineapi.EffectiveTraceMode(config)
+	if err != nil {
+		return model.BlockResult{}, control.Trace{Engine: engineName}, err
+	}
+	dispatcher, err := policy.NewDispatcherWithTrace(selectedPolicy, traceMode)
 	if err != nil {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, err
 	}
@@ -149,11 +153,21 @@ func (e *Engine) ExecuteBlock(
 		return model.BlockResult{}, trace(), err
 	}
 	result.FinalState = working.Snapshot()
-	result.Digest = model.CanonicalDigest(result)
+	if !config.OmitResultDigest {
+		result.Digest = model.CanonicalDigest(result)
+	}
 	if err := storage.Replace(result.FinalState); err != nil {
 		return model.BlockResult{}, trace(), err
 	}
-	return result, trace(), nil
+	finalTrace := trace()
+	if traceMode != control.TraceOff {
+		finalTrace.WorkAvailable = true
+		finalTrace.Work.ExecutionAttempts = uint64(len(result.Transactions))
+		for _, transaction := range result.Transactions {
+			finalTrace.Work.UsefulExecutionUnits += transaction.UnitsUsed
+		}
+	}
+	return result, finalTrace, nil
 }
 
 func serialCapabilities() control.Capabilities {

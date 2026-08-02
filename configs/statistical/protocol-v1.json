@@ -1,0 +1,25 @@
+{
+  "schema_version": "statistical-protocol-v1",
+  "status": "frozen",
+  "paired_workload_seeds": true,
+  "balanced_randomized_order": true,
+  "minimum_warmup_rounds": 3,
+  "minimum_measurement_rounds": 30,
+  "confidence_level": 0.95,
+  "confidence_interval_method": "paired_percentile_bootstrap",
+  "bootstrap_resamples": 10000,
+  "material_effect_ratio": 0.05,
+  "telemetry_overhead_budget_ratio": 0.10,
+  "p99_minimum_transactions": 10000,
+  "multiple_comparison_correction": "holm_bonferroni_within_each_preregistered_family",
+  "outlier_policy": "retain_all_successful_runs; exclude_only_preregistered_infrastructure_failures with raw records preserved",
+  "timeout_policy": "mark_censored; do_not_impute; report count and rerun only under the frozen timeout",
+  "crash_oom_policy": "mark_failed_or_censored; preserve stderr and manifest; never drop silently",
+  "ranking_reversal_requirements": [
+    "paired_difference_ci_excludes_zero",
+    "effect_exceeds_material_threshold",
+    "reversal_repeats_at_multiple_nearby_workload_points",
+    "switching_policy_and_telemetry_overhead_included"
+  ],
+  "pilot_separation": "pilot results freeze parameters only and must not be pooled with formal measurements"
+}

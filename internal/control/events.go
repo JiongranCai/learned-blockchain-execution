@@ -80,6 +80,15 @@ func EventRegistry() []EventDescriptor {
 	return append([]EventDescriptor(nil), eventRegistry...)
 }
 
+func EventDescription(event Event) (EventDescriptor, bool) {
+	for _, descriptor := range eventRegistry {
+		if descriptor.Event == event {
+			return descriptor, true
+		}
+	}
+	return EventDescriptor{}, false
+}
+
 func ValidateEventRegistry() error {
 	expected := []Event{
 		EventEpochStart,

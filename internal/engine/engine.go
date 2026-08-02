@@ -20,9 +20,21 @@ var (
 )
 
 type RunConfig struct {
-	Executors int
-	EpochID   string
-	Policy    policy.Policy
+	Executors        int
+	EpochID          string
+	Policy           policy.Policy
+	TraceMode        control.TraceMode
+	OmitResultDigest bool
+}
+
+func EffectiveTraceMode(config RunConfig) (control.TraceMode, error) {
+	if config.TraceMode == "" {
+		return control.TraceDetailed, nil
+	}
+	if !control.ValidTraceMode(config.TraceMode) {
+		return "", fmt.Errorf("invalid trace mode %q", config.TraceMode)
+	}
+	return config.TraceMode, nil
 }
 
 type Engine interface {

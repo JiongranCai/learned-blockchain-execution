@@ -175,6 +175,10 @@ func TestSerialTraceUsesSharedPolicySeam(t *testing.T) {
 	if trace.Engine != "serial" || trace.PolicyName != "SerialPreset" || trace.PolicyVersion == "" {
 		t.Fatalf("unexpected trace identity: %#v", trace)
 	}
+	if !trace.WorkAvailable || trace.Work.ExecutionAttempts != 1 || trace.Work.ReexecutionAttempts != 0 ||
+		trace.Work.UsefulExecutionUnits != result.Transactions[0].UnitsUsed {
+		t.Fatalf("unexpected serial work telemetry: %#v", trace.Work)
+	}
 	wantCounts := map[control.Event]int{
 		control.EventEpochStart:  1,
 		control.EventBlockReady:  1,
@@ -192,6 +196,44 @@ func TestSerialTraceUsesSharedPolicySeam(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotCounts, wantCounts) {
 		t.Fatalf("unexpected trace events: got %v want %v", gotCounts, wantCounts)
+	}
+}
+
+func TestSerialCanDeferDigestAndDisableTelemetryWithoutChangingCanonicalResult(t *testing.T) {
+	block := model.Block{
+		ID: "timed-boundary",
+		Transactions: []model.Transaction{{
+			ID:       "tx",
+			MaxUnits: 2,
+			Program: model.Program{Instructions: []model.Instruction{
+				{Op: model.OpWrite, Key: []byte("key"), Expression: model.Expression{Base: model.Literal(9)}},
+				{Op: model.OpReturn, Expression: model.Expression{Base: model.Literal(9)}},
+			}},
+		}},
+	}
+	baselineState := memkv.New()
+	baseline, _, err := serial.New(nil).ExecuteBlock(context.Background(), block, baselineState, engineapi.RunConfig{Executors: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	timedState := memkv.New()
+	timed, trace, err := serial.New(nil).ExecuteBlock(context.Background(), block, timedState, engineapi.RunConfig{
+		Executors:        1,
+		TraceMode:        control.TraceOff,
+		OmitResultDigest: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if timed.Digest != "" {
+		t.Fatalf("digest was computed inside the timed engine path: %q", timed.Digest)
+	}
+	if trace.Mode != control.TraceOff || trace.WorkAvailable || len(trace.Events) != 0 || len(trace.ActionCounters) != 0 {
+		t.Fatalf("off mode retained telemetry: %#v", trace)
+	}
+	timed.Digest = model.CanonicalDigest(timed)
+	if !reflect.DeepEqual(timed, baseline) || !reflect.DeepEqual(timedState.Snapshot(), baselineState.Snapshot()) {
+		t.Fatalf("deferred digest/off telemetry changed canonical execution:\ntimed=%#v\nbaseline=%#v", timed, baseline)
 	}
 }
 

@@ -50,12 +50,18 @@ func TestDispatcherMapsEveryEventToItsTypedHook(t *testing.T) {
 	}
 	counts := make(map[control.Event]int)
 	for _, record := range trace.Events {
+		if record.TrustClass == "" || record.FeatureSource != "fixed_config" || record.ObservationVersion != "none" || record.PolicyTableVersion == "" {
+			t.Fatalf("event provenance is incomplete: %#v", record)
+		}
 		counts[record.Event]++
 	}
 	for _, descriptor := range control.EventRegistry() {
 		if counts[descriptor.Event] != 1 {
 			t.Fatalf("event %s dispatched %d times, want once", descriptor.Event, counts[descriptor.Event])
 		}
+	}
+	if len(trace.ActionCounters) != len(control.EventRegistry()) {
+		t.Fatalf("got %d action counters, want %d", len(trace.ActionCounters), len(control.EventRegistry()))
 	}
 }
 

@@ -1,0 +1,58 @@
+{
+  "schema_version": "experiment-matrix-v1",
+  "run_class": "formal",
+  "workload": {
+    "synthetic": {
+      "seed": 42,
+      "initial_keys": 8,
+      "key_space": 6,
+      "block_count": 3,
+      "transactions_per_block": 6,
+      "max_compute_units": 8,
+      "transaction_max_units": 12,
+      "failure_every": 3
+    },
+    "expected_hash": "6b71316d4076a8d0e27f078e6c52a2f9a042047e88c34ee2ea63792fafbe609d"
+  },
+  "statistical_protocol": "configs/statistical/protocol-v1.json",
+  "warmup_rounds": 3,
+  "measurement_rounds": 30,
+  "order_seed": 20260802,
+  "timeout": "2m",
+  "environment": {
+    "affinity": "REPLACE_WITH_FROZEN_LINUX_CPUSET",
+    "numa_policy": "REPLACE_WITH_FROZEN_LINUX_NUMA_POLICY",
+    "state_reset": "fresh_state_from_frozen_artifact",
+    "page_cache": "REPLACE_WITH_FROZEN_LINUX_PAGE_CACHE_POLICY",
+    "process_reuse": "fresh_process_per_run"
+  },
+  "cases": [
+    {
+      "id": "blockstm-2-off",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 2,
+      "trace_mode": "off"
+    },
+    {
+      "id": "blockstm-2-counters",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 2,
+      "trace_mode": "counters"
+    }
+  ],
+  "output": {
+    "validation_bundle": "results/week4-linux-formal/validation-bundle.json",
+    "validation_records": "results/week4-linux-formal/validation.jsonl",
+    "run_records": "results/week4-linux-formal/runs.jsonl",
+    "action_traces": "results/week4-linux-formal/action-traces.jsonl"
+  },
+  "telemetry_ablation": {
+    "off_case": "blockstm-2-off",
+    "instrumented_case": "blockstm-2-counters",
+    "enforce_platforms": [
+      "linux"
+    ]
+  }
+}

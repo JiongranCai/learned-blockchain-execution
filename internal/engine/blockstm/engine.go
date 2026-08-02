@@ -74,7 +74,11 @@ func (e *Engine) ExecuteBlock(
 	if selectedPolicy == nil {
 		selectedPolicy = fixed.NewBlockSTMPreset()
 	}
-	dispatcher, err := policy.NewDispatcher(selectedPolicy)
+	traceMode, err := engineapi.EffectiveTraceMode(config)
+	if err != nil {
+		return model.BlockResult{}, control.Trace{Engine: engineName}, err
+	}
+	dispatcher, err := policy.NewDispatcherWithTrace(selectedPolicy, traceMode)
 	if err != nil {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, err
 	}
@@ -173,7 +177,7 @@ func (e *Engine) ExecuteBlock(
 		if txResult.Status == model.TxStatusSuccess {
 			view.CommitTo(adapter)
 		}
-		slots[transactionIndex].store(txResult)
+		slots[transactionIndex].store(incarnation, txResult, traceMode != control.TraceOff)
 	}
 
 	err = kernel.ExecuteBlock(
@@ -216,18 +220,28 @@ func (e *Engine) ExecuteBlock(
 	if err != nil {
 		return model.BlockResult{}, trace(), err
 	}
-	result.Digest = model.CanonicalDigest(result)
+	if !config.OmitResultDigest {
+		result.Digest = model.CanonicalDigest(result)
+	}
 	if err := storage.Replace(result.FinalState); err != nil {
 		return model.BlockResult{}, trace(), err
 	}
-	return result, trace(), nil
+	finalTrace := trace()
+	if traceMode != control.TraceOff {
+		finalTrace.WorkAvailable = true
+		for index := range slots {
+			addWorkCounters(&finalTrace.Work, slots[index].work())
+		}
+	}
+	return result, finalTrace, nil
 }
 
 type resultSlot struct {
-	mu         sync.Mutex
-	executions uint64
-	result     model.TxResult
-	ready      bool
+	mu           sync.Mutex
+	executions   uint64
+	result       model.TxResult
+	ready        bool
+	attemptUnits []uint64
 }
 
 func (s *resultSlot) beginExecution() uint64 {
@@ -238,10 +252,16 @@ func (s *resultSlot) beginExecution() uint64 {
 	return incarnation
 }
 
-func (s *resultSlot) store(result model.TxResult) {
+func (s *resultSlot) store(incarnation uint64, result model.TxResult, captureWork bool) {
 	s.mu.Lock()
 	s.result = result
 	s.ready = true
+	if captureWork {
+		for uint64(len(s.attemptUnits)) <= incarnation {
+			s.attemptUnits = append(s.attemptUnits, 0)
+		}
+		s.attemptUnits[incarnation] = result.UnitsUsed
+	}
 	s.mu.Unlock()
 }
 
@@ -250,6 +270,33 @@ func (s *resultSlot) load() (model.TxResult, bool) {
 	result, ready := s.result, s.ready
 	s.mu.Unlock()
 	return result, ready
+}
+
+func (s *resultSlot) work() control.WorkCounters {
+	s.mu.Lock()
+	attempts := append([]uint64(nil), s.attemptUnits...)
+	s.mu.Unlock()
+	if len(attempts) == 0 {
+		return control.WorkCounters{}
+	}
+	work := control.WorkCounters{
+		ExecutionAttempts:    uint64(len(attempts)),
+		ReexecutionAttempts:  uint64(len(attempts) - 1),
+		UsefulExecutionUnits: attempts[len(attempts)-1],
+	}
+	for _, units := range attempts[:len(attempts)-1] {
+		work.ReexecutedExecutionUnits += units
+		work.DiscardedExecutionUnits += units
+	}
+	return work
+}
+
+func addWorkCounters(target *control.WorkCounters, source control.WorkCounters) {
+	target.ExecutionAttempts += source.ExecutionAttempts
+	target.ReexecutionAttempts += source.ReexecutionAttempts
+	target.UsefulExecutionUnits += source.UsefulExecutionUnits
+	target.ReexecutedExecutionUnits += source.ReexecutedExecutionUnits
+	target.DiscardedExecutionUnits += source.DiscardedExecutionUnits
 }
 
 type executionErrors struct {
