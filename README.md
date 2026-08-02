@@ -91,11 +91,11 @@ go test -count=1 -v ./internal/control ./internal/policy ./internal/policy/fixed
 go test -race -count=1 ./internal/engine/blockstm ./internal/control ./internal/policy
 ```
 
-`scripts/verify_upstream_baseline.sh` additionally proves that the frozen root-level go-block-stm kernel is unchanged and reruns the full baseline suite. Performance, scaling, affinity, and NUMA measurements are intentionally deferred to Linux; macOS results are correctness checks only.
+`scripts/verify_upstream_baseline.sh` additionally proves that every original frozen root-level go-block-stm file remains unmodified and reruns the full baseline suite. Week 5 adds `speculation.go` beside those files because the admission scheduler must share package-private MVMemory/status machinery; the `L=W` default still calls the original `ExecuteBlock` path directly. Performance, scaling, affinity, and NUMA measurements are intentionally deferred to Linux; macOS results are correctness checks and pilot evidence only.
 
 ## Benchmark runner and telemetry
 
-Week 4 adds a strict `experiment-matrix-v1` runner under `cmd/bench`. Build the binary so Go embeds the Git revision and dirty-worktree bit, then run the smoke matrix:
+Week 4 adds a strict experiment-matrix runner under `cmd/bench`; Week 5 evolves the contract to `experiment-matrix-v2` with an explicit CQ2 `max_speculative_inflight` budget. Build the binary so Go embeds the Git revision and dirty-worktree bit, then run the smoke matrix:
 
 ```sh
 go build -trimpath -o /tmp/blockchain-execution-bench ./cmd/bench
@@ -105,7 +105,7 @@ go build -trimpath -o /tmp/blockchain-execution-bench ./cmd/bench
 
 `validate` executes the serial oracle and every configured candidate on independent states, compares the complete canonical block results, and writes a validation bundle bound to the binary commit, config hash, statistical protocol, workload hash, and expected result digest. `run` refuses a stale bundle and executes only a validated candidate. Every warmup and measurement is launched in a fresh process, while workload loading/generation, state construction, canonical digesting, result comparison, JSON encoding, and trace output remain outside the timed interval.
 
-Each run emits `benchmark-run-v1` JSONL with hardware/runtime provenance, process ID, Linux allowed CPU/memory-node lists and governor, block latencies, goodput, useful/re-executed/discarded work, incarnation attempts, action/fallback counters, policy decision cost, memory high-water mark, capability availability, and explicit unavailable metrics. `action-trace-v1` records stable targets, trust class, feature source, observation version, policy-table version, action, and lookup/dispatch duration. Trace modes are `detailed`, `counters`, and `off`; formal timing uses `counters`, while `detailed` is a diagnostic/action-trace mode. Matched instrumented/off cases produce a `telemetry-ablation-v1` record without changing canonical results.
+Each run emits `benchmark-run-v2` JSONL with hardware/runtime provenance, process ID, Linux allowed CPU/memory-node lists and governor, block latencies, goodput, useful/re-executed/discarded work, incarnation attempts, CQ2 limit/peak/stall counters, action/fallback counters, policy decision cost, memory high-water mark, capability availability, and explicit unavailable metrics. `action-trace-v2` records stable targets, trust class, feature source, observation version, policy-table version, action, and lookup/dispatch duration. Trace modes are `detailed`, `counters`, and `off`; formal timing uses `counters`, while `detailed` is a diagnostic/action-trace mode. Matched instrumented/off cases produce a `telemetry-ablation-v1` record without changing canonical results.
 
 The smoke outputs are generated under `results/` and are intentionally ignored by Git. They are not paper data. Formal runs require Linux, a clean VCS-stamped binary, the frozen minimum repetitions in `configs/statistical/protocol-v1.json`, and explicit affinity, NUMA, and page-cache controls. The formal template is deliberately rejected until its `REPLACE_WITH_...` fields are frozen for the target server.
 
@@ -116,3 +116,15 @@ On an already provisioned Linux host, the complete correctness/build/runner smok
 ```
 
 The script uses `GOPROXY=off` and never installs tools or dependencies; a missing Go toolchain, race prerequisite, or module cache is reported as an environment failure.
+
+## Week 5 CQ2 speculation limit
+
+`max_speculative_inflight` limits the number of admitted top-level transactions beyond the continuous stable validated frontier. A transaction retains one slot while executing, suspended, validating, or reexecuting; a new incarnation does not take a second slot. Positive limits use the admission-aware scheduler, while zero means `W` and preserves the original full-window Block-STM path.
+
+The committed Mac smoke matrices keep `P=8`, CQ1 at one full consensus block, CQ3 at runtime MVCC, CQ4 at whole-transaction recovery, and CQ5 on the shared worker pool. They compare `L ∈ {1, P, 4P, W}` on expensive low-conflict, cheap hotspot-chain, and fixed-cost boundary workloads with `key_space ∈ {1,2,3}`. Every candidate is differentially validated against the serial oracle before measurement.
+
+```sh
+./scripts/run_week5_cq2_smoke.sh
+```
+
+`benchmark-run-v2` reports the configured/effective limit, exact peak admitted occupancy and summed admission-stall worker time for finite limits, plus the existing incarnation/reexecution/discarded-work breakdown. Exact occupancy is deliberately unavailable on the untouched `L=W` path rather than inferred. The Linux formal template remains rejected until its affinity, NUMA, and page-cache placeholders are frozen on the target host.

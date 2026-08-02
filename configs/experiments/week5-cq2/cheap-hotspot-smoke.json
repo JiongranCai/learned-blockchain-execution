@@ -1,0 +1,77 @@
+{
+  "schema_version": "experiment-matrix-v2",
+  "run_class": "smoke",
+  "workload": {
+    "synthetic": {
+      "seed": 20260802,
+      "initial_keys": 8,
+      "key_space": 1,
+      "block_count": 1,
+      "transactions_per_block": 512,
+      "max_compute_units": 100,
+      "transaction_max_units": 104,
+      "failure_every": 0
+    },
+    "expected_hash": "5f06a85c3e71b3cda38e09b3fb94bdbb60c2ab6646211a535d15818cc4940ab9"
+  },
+  "statistical_protocol": "configs/statistical/protocol-v1.json",
+  "warmup_rounds": 2,
+  "measurement_rounds": 10,
+  "order_seed": 20260802,
+  "timeout": "2m",
+  "environment": {
+    "affinity": "uncontrolled_mac_pilot",
+    "numa_policy": "uncontrolled_mac_pilot",
+    "state_reset": "fresh_state_from_frozen_artifact",
+    "page_cache": "unchanged_and_recorded_as_smoke",
+    "process_reuse": "fresh_process_per_run"
+  },
+  "cases": [
+    {
+      "id": "serial-1",
+      "engine": "serial",
+      "policy": "serial_preset",
+      "executors": 1,
+      "max_speculative_inflight": 1,
+      "trace_mode": "counters"
+    },
+    {
+      "id": "cq2-L1",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 1,
+      "trace_mode": "counters"
+    },
+    {
+      "id": "cq2-LP",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 8,
+      "trace_mode": "counters"
+    },
+    {
+      "id": "cq2-L4P",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 32,
+      "trace_mode": "counters"
+    },
+    {
+      "id": "cq2-LW",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "trace_mode": "counters"
+    }
+  ],
+  "output": {
+    "validation_bundle": "results/week5-cq2/cheap-hotspot/validation-bundle.json",
+    "validation_records": "results/week5-cq2/cheap-hotspot/validation.jsonl",
+    "run_records": "results/week5-cq2/cheap-hotspot/runs.jsonl",
+    "action_traces": "results/week5-cq2/cheap-hotspot/action-traces.jsonl"
+  }
+}

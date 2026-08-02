@@ -13,7 +13,7 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/workload"
 )
 
-const ValidationBundleSchemaVersion = "validation-bundle-v1"
+const ValidationBundleSchemaVersion = "validation-bundle-v2"
 
 var (
 	ErrInvalidValidationBundle = errors.New("invalid validation bundle")
@@ -21,10 +21,11 @@ var (
 )
 
 type ValidatedCase struct {
-	ID        string `json:"id"`
-	Engine    string `json:"engine"`
-	Policy    string `json:"policy"`
-	Executors int    `json:"executors"`
+	ID                     string `json:"id"`
+	Engine                 string `json:"engine"`
+	Policy                 string `json:"policy"`
+	Executors              int    `json:"executors"`
+	MaxSpeculativeInflight int    `json:"max_speculative_inflight"`
 }
 
 type ValidationBundle struct {
@@ -121,10 +122,11 @@ func Validate(ctx context.Context, loaded LoadedConfig) (ValidationBundle, error
 		}
 		if match {
 			validated = append(validated, ValidatedCase{
-				ID:        experimentCase.ID,
-				Engine:    experimentCase.Engine,
-				Policy:    experimentCase.Policy,
-				Executors: experimentCase.Executors,
+				ID:                     experimentCase.ID,
+				Engine:                 experimentCase.Engine,
+				Policy:                 experimentCase.Policy,
+				Executors:              experimentCase.Executors,
+				MaxSpeculativeInflight: experimentCase.MaxSpeculativeInflight,
 			})
 		}
 	}
@@ -419,7 +421,8 @@ func buildSchedule(config Config) []WorkerRequest {
 func bundleHasCase(bundle ValidationBundle, experimentCase CaseConfig) bool {
 	for _, candidate := range bundle.ValidatedCases {
 		if candidate.ID == experimentCase.ID && candidate.Engine == experimentCase.Engine &&
-			candidate.Policy == experimentCase.Policy && candidate.Executors == experimentCase.Executors {
+			candidate.Policy == experimentCase.Policy && candidate.Executors == experimentCase.Executors &&
+			candidate.MaxSpeculativeInflight == experimentCase.MaxSpeculativeInflight {
 			return true
 		}
 	}

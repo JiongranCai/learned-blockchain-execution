@@ -10,19 +10,20 @@ import (
 )
 
 const (
-	BenchmarkRecordSchema  = "benchmark-run-v1"
-	ValidationRecordSchema = "validation-run-v1"
-	ActionTraceSchema      = "action-trace-v1"
+	BenchmarkRecordSchema  = "benchmark-run-v2"
+	ValidationRecordSchema = "validation-run-v2"
+	ActionTraceSchema      = "action-trace-v2"
 	AblationRecordSchema   = "telemetry-ablation-v1"
 )
 
 type Case struct {
-	ID            string            `json:"id"`
-	Engine        string            `json:"engine"`
-	Policy        string            `json:"policy"`
-	PolicyVersion string            `json:"policy_version"`
-	Executors     int               `json:"executors"`
-	TraceMode     control.TraceMode `json:"trace_mode"`
+	ID                     string            `json:"id"`
+	Engine                 string            `json:"engine"`
+	Policy                 string            `json:"policy"`
+	PolicyVersion          string            `json:"policy_version"`
+	Executors              int               `json:"executors"`
+	MaxSpeculativeInflight int               `json:"max_speculative_inflight"`
+	TraceMode              control.TraceMode `json:"trace_mode"`
 }
 
 type Environment struct {
@@ -83,28 +84,34 @@ type Timing struct {
 }
 
 type Metrics struct {
-	Blocks                    uint64                  `json:"blocks"`
-	Transactions              uint64                  `json:"transactions"`
-	SuccessfulTransactions    uint64                  `json:"successful_transactions"`
-	FailedTransactions        uint64                  `json:"failed_transactions"`
-	UsefulExecutionUnits      uint64                  `json:"useful_execution_units"`
-	ReexecutedExecutionUnits  uint64                  `json:"reexecuted_execution_units"`
-	DiscardedExecutionUnits   uint64                  `json:"discarded_execution_units"`
-	ExecutionAttempts         uint64                  `json:"execution_attempts"`
-	ReexecutionAttempts       uint64                  `json:"reexecution_attempts"`
-	CompletedTransactionsPerS float64                 `json:"completed_transactions_per_second"`
-	CommittedGoodputPerS      float64                 `json:"committed_goodput_per_second"`
-	ValidationEvents          uint64                  `json:"validation_events"`
-	ValidationFailures        uint64                  `json:"validation_failures"`
-	ReexecutionEvents         uint64                  `json:"reexecution_events"`
-	WaitEvents                uint64                  `json:"wait_events"`
-	WorkerIdleEvents          uint64                  `json:"worker_idle_events"`
-	QueuePressureEvents       uint64                  `json:"queue_pressure_events"`
-	PolicyDecisionNS          uint64                  `json:"policy_decision_ns"`
-	MaxRSSBytes               uint64                  `json:"max_rss_bytes"`
-	ActionCounters            []control.ActionCounter `json:"action_counters,omitempty"`
-	FallbackCounters          []control.ActionCounter `json:"fallback_counters,omitempty"`
-	Unavailable               []string                `json:"unavailable"`
+	Blocks                        uint64                  `json:"blocks"`
+	Transactions                  uint64                  `json:"transactions"`
+	SuccessfulTransactions        uint64                  `json:"successful_transactions"`
+	FailedTransactions            uint64                  `json:"failed_transactions"`
+	UsefulExecutionUnits          uint64                  `json:"useful_execution_units"`
+	ReexecutedExecutionUnits      uint64                  `json:"reexecuted_execution_units"`
+	DiscardedExecutionUnits       uint64                  `json:"discarded_execution_units"`
+	ExecutionAttempts             uint64                  `json:"execution_attempts"`
+	ReexecutionAttempts           uint64                  `json:"reexecution_attempts"`
+	CompletedTransactionsPerS     float64                 `json:"completed_transactions_per_second"`
+	CommittedGoodputPerS          float64                 `json:"committed_goodput_per_second"`
+	ValidationEvents              uint64                  `json:"validation_events"`
+	ValidationFailures            uint64                  `json:"validation_failures"`
+	ReexecutionEvents             uint64                  `json:"reexecution_events"`
+	WaitEvents                    uint64                  `json:"wait_events"`
+	WorkerIdleEvents              uint64                  `json:"worker_idle_events"`
+	QueuePressureEvents           uint64                  `json:"queue_pressure_events"`
+	PolicyDecisionNS              uint64                  `json:"policy_decision_ns"`
+	MaxRSSBytes                   uint64                  `json:"max_rss_bytes"`
+	ActionCounters                []control.ActionCounter `json:"action_counters,omitempty"`
+	FallbackCounters              []control.ActionCounter `json:"fallback_counters,omitempty"`
+	EffectiveSpeculationLimit     uint64                  `json:"effective_speculation_limit"`
+	SpeculationLimitApplied       bool                    `json:"speculation_limit_applied"`
+	SpeculationTelemetryAvailable bool                    `json:"speculation_telemetry_available"`
+	PeakSpeculativeInflight       uint64                  `json:"peak_speculative_inflight"`
+	AdmissionStallEvents          uint64                  `json:"admission_stall_events"`
+	AdmissionStallNS              uint64                  `json:"admission_stall_ns"`
+	Unavailable                   []string                `json:"unavailable"`
 }
 
 type BenchmarkRecord struct {
@@ -191,6 +198,7 @@ func CollectMetrics(results []model.BlockResult, traces []control.Trace, executi
 	fallbacks := make(map[string]control.ActionCounter)
 	detailedTraceSeen := false
 	workTelemetrySeen := false
+	speculationTelemetrySeen := false
 	for _, trace := range traces {
 		if trace.Mode == control.TraceDetailed {
 			detailedTraceSeen = true
@@ -198,6 +206,19 @@ func CollectMetrics(results []model.BlockResult, traces []control.Trace, executi
 		metrics.PolicyDecisionNS += trace.PolicyDecisionDurationNS
 		if trace.WorkAvailable {
 			workTelemetrySeen = true
+			if trace.Work.SpeculationLimit > metrics.EffectiveSpeculationLimit {
+				metrics.EffectiveSpeculationLimit = trace.Work.SpeculationLimit
+			}
+			metrics.SpeculationLimitApplied = metrics.SpeculationLimitApplied || trace.Work.SpeculationLimitApplied
+			if trace.Work.SpeculationTelemetryAvailable {
+				speculationTelemetrySeen = true
+				metrics.SpeculationTelemetryAvailable = true
+			}
+			if trace.Work.PeakSpeculativeInflight > metrics.PeakSpeculativeInflight {
+				metrics.PeakSpeculativeInflight = trace.Work.PeakSpeculativeInflight
+			}
+			metrics.AdmissionStallEvents += trace.Work.AdmissionStallEvents
+			metrics.AdmissionStallNS += trace.Work.AdmissionStallNS
 			metrics.ExecutionAttempts += trace.Work.ExecutionAttempts
 			metrics.ReexecutionAttempts += trace.Work.ReexecutionAttempts
 			metrics.ReexecutedExecutionUnits += trace.Work.ReexecutedExecutionUnits
@@ -231,6 +252,9 @@ func CollectMetrics(results []model.BlockResult, traces []control.Trace, executi
 	}
 	if !workTelemetrySeen {
 		metrics.Unavailable = append(metrics.Unavailable, "reexecution_work: telemetry is disabled")
+	}
+	if workTelemetrySeen && !speculationTelemetrySeen {
+		metrics.Unavailable = append(metrics.Unavailable, "peak_speculative_inflight: original full-window path does not expose exact admission occupancy")
 	}
 	return metrics
 }

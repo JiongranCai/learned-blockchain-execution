@@ -20,11 +20,17 @@ func TestCollectMetricsUsesCanonicalResultsAndTraceCounters(t *testing.T) {
 		PolicyDecisionDurationNS: 11,
 		WorkAvailable:            true,
 		Work: control.WorkCounters{
-			ExecutionAttempts:        3,
-			ReexecutionAttempts:      1,
-			UsefulExecutionUnits:     10,
-			ReexecutedExecutionUnits: 4,
-			DiscardedExecutionUnits:  4,
+			ExecutionAttempts:             3,
+			ReexecutionAttempts:           1,
+			UsefulExecutionUnits:          10,
+			ReexecutedExecutionUnits:      4,
+			DiscardedExecutionUnits:       4,
+			SpeculationLimit:              2,
+			SpeculationLimitApplied:       true,
+			SpeculationTelemetryAvailable: true,
+			PeakSpeculativeInflight:       2,
+			AdmissionStallEvents:          3,
+			AdmissionStallNS:              17,
 		},
 		ActionCounters: []control.ActionCounter{
 			{Event: control.EventTxEnd, Action: "mandatory_final", Count: 2},
@@ -44,6 +50,10 @@ func TestCollectMetricsUsesCanonicalResultsAndTraceCounters(t *testing.T) {
 	}
 	if metrics.ExecutionAttempts != 3 || metrics.ReexecutionAttempts != 1 || metrics.ReexecutedExecutionUnits != 4 || metrics.DiscardedExecutionUnits != 4 {
 		t.Fatalf("unexpected incarnation metrics: %#v", metrics)
+	}
+	if metrics.EffectiveSpeculationLimit != 2 || !metrics.SpeculationLimitApplied || !metrics.SpeculationTelemetryAvailable ||
+		metrics.PeakSpeculativeInflight != 2 || metrics.AdmissionStallEvents != 3 || metrics.AdmissionStallNS != 17 {
+		t.Fatalf("unexpected speculation metrics: %#v", metrics)
 	}
 	if metrics.CompletedTransactionsPerS != 2 || metrics.CommittedGoodputPerS != 1 || metrics.PolicyDecisionNS != 11 || metrics.MaxRSSBytes != 4096 {
 		t.Fatalf("unexpected rate/provenance metrics: %#v", metrics)

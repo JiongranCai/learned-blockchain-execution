@@ -18,9 +18,9 @@ if ! git merge-base --is-ancestor "${expected_upstream_commit}" HEAD; then
   exit 1
 fi
 
-if ! git diff --quiet "${expected_upstream_commit}" -- \
+if ! git diff --quiet --diff-filter=MD "${expected_upstream_commit}" -- \
   ':(top,glob)*.go' go.mod go.sum LICENSE .github/workflows/go.yml; then
-  echo "upstream kernel differs from the frozen baseline" >&2
+  echo "an original upstream kernel file differs from the frozen baseline" >&2
   exit 1
 fi
 

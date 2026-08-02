@@ -18,7 +18,7 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/workload/synthetic"
 )
 
-const ConfigSchemaVersion = "experiment-matrix-v1"
+const ConfigSchemaVersion = "experiment-matrix-v2"
 
 var ErrInvalidConfig = errors.New("invalid experiment config")
 
@@ -44,21 +44,23 @@ type WorkloadConfig struct {
 }
 
 type CaseConfig struct {
-	ID        string            `json:"id"`
-	Engine    string            `json:"engine"`
-	Policy    string            `json:"policy"`
-	Executors int               `json:"executors"`
-	TraceMode control.TraceMode `json:"trace_mode"`
+	ID                     string            `json:"id"`
+	Engine                 string            `json:"engine"`
+	Policy                 string            `json:"policy"`
+	Executors              int               `json:"executors"`
+	MaxSpeculativeInflight int               `json:"max_speculative_inflight"`
+	TraceMode              control.TraceMode `json:"trace_mode"`
 }
 
 func (c CaseConfig) TelemetryCase() telemetry.Case {
 	return telemetry.Case{
-		ID:            c.ID,
-		Engine:        c.Engine,
-		Policy:        c.Policy,
-		PolicyVersion: fixed.PresetVersion,
-		Executors:     c.Executors,
-		TraceMode:     c.TraceMode,
+		ID:                     c.ID,
+		Engine:                 c.Engine,
+		Policy:                 c.Policy,
+		PolicyVersion:          fixed.PresetVersion,
+		Executors:              c.Executors,
+		MaxSpeculativeInflight: c.MaxSpeculativeInflight,
+		TraceMode:              c.TraceMode,
 	}
 }
 
@@ -174,6 +176,9 @@ func (c Config) validate() (time.Duration, error) {
 		if experimentCase.Executors < 0 {
 			return invalid("case %q has a negative executor count", experimentCase.ID)
 		}
+		if experimentCase.MaxSpeculativeInflight < 0 {
+			return invalid("case %q has a negative max_speculative_inflight", experimentCase.ID)
+		}
 		if !control.ValidTraceMode(experimentCase.TraceMode) {
 			return invalid("case %q has invalid trace_mode %q", experimentCase.ID, experimentCase.TraceMode)
 		}
@@ -182,6 +187,9 @@ func (c Config) validate() (time.Duration, error) {
 		}
 		if experimentCase.Policy != "serial_preset" && experimentCase.Policy != "blockstm_preset" {
 			return invalid("case %q has unknown policy %q", experimentCase.ID, experimentCase.Policy)
+		}
+		if experimentCase.Engine == "serial" && experimentCase.MaxSpeculativeInflight > 1 {
+			return invalid("serial case %q must use max_speculative_inflight 0 or 1", experimentCase.ID)
 		}
 		caseIDs[experimentCase.ID] = experimentCase
 	}
@@ -205,7 +213,8 @@ func (c Config) validate() (time.Duration, error) {
 		if off.TraceMode != control.TraceOff || instrumented.TraceMode == control.TraceOff {
 			return invalid("telemetry ablation requires off and instrumented trace modes")
 		}
-		if off.Engine != instrumented.Engine || off.Policy != instrumented.Policy || off.Executors != instrumented.Executors {
+		if off.Engine != instrumented.Engine || off.Policy != instrumented.Policy || off.Executors != instrumented.Executors ||
+			off.MaxSpeculativeInflight != instrumented.MaxSpeculativeInflight {
 			return invalid("telemetry ablation cases may differ only by trace mode and id")
 		}
 		for _, platform := range c.TelemetryAblation.EnforcePlatforms {

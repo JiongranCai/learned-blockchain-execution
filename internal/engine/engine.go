@@ -13,18 +13,22 @@ import (
 )
 
 var (
-	ErrNilState       = errors.New("engine requires a non-nil state")
-	ErrMissingBlockID = errors.New("block id is required")
-	ErrInvalidWorkers = errors.New("invalid executor count")
-	ErrUnsupported    = errors.New("policy decision is unsupported by engine")
+	ErrNilState                = errors.New("engine requires a non-nil state")
+	ErrMissingBlockID          = errors.New("block id is required")
+	ErrInvalidWorkers          = errors.New("invalid executor count")
+	ErrInvalidSpeculationLimit = errors.New("invalid max speculative inflight")
+	ErrUnsupported             = errors.New("policy decision is unsupported by engine")
 )
 
 type RunConfig struct {
-	Executors        int
-	EpochID          string
-	Policy           policy.Policy
-	TraceMode        control.TraceMode
-	OmitResultDigest bool
+	Executors int
+	EpochID   string
+	Policy    policy.Policy
+	TraceMode control.TraceMode
+	// MaxSpeculativeInflight bounds admitted transactions beyond the stable
+	// validated frontier. Zero means the full block window (W).
+	MaxSpeculativeInflight int
+	OmitResultDigest       bool
 }
 
 func EffectiveTraceMode(config RunConfig) (control.TraceMode, error) {

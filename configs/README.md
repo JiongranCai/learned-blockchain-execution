@@ -1,6 +1,8 @@
 # Experiment configuration contracts
 
-`experiment-matrix-v1` is the single input contract for `bench validate` and `bench run`. Parsing rejects unknown fields, duplicate case IDs, unknown engines/policies, invalid trace modes, ambiguous workload sources, non-frozen workload hashes, implicit environment controls, and formal configurations that still contain placeholder or uncontrolled affinity/NUMA/page-cache values.
+`experiment-matrix-v2` is the single input contract for `bench validate` and `bench run`. Parsing rejects unknown fields, duplicate case IDs, unknown engines/policies, invalid trace modes, ambiguous workload sources, non-frozen workload hashes, implicit environment controls, negative CQ2 limits, serial limits above one, and formal configurations that still contain placeholder or uncontrolled affinity/NUMA/page-cache values.
+
+`max_speculative_inflight` is CQ2's static admission budget. Zero means the original full-block window `W`; a positive value is reduced to `min(L,W)` for each block. The worker count remains fixed while `L` changes. A transaction occupies one slot until it enters the continuous stable validated frontier, including suspension and every incarnation; reexecution does not acquire another slot.
 
 The performance boundary starts immediately before `Engine.ExecuteBlock` and ends immediately after it returns. State materialization and engine/policy construction happen first. Performance mode asks the engine to defer its canonical SHA-256 digest until after the interval; validation and expected-digest comparison also happen afterward. State publication remains inside the interval.
 
@@ -21,3 +23,7 @@ The parent runner balances case order once per round with the frozen `order_seed
 - ranking reversal only when the paired CI excludes zero, the material threshold is exceeded, nearby workload points repeat the reversal, and switching/policy/telemetry overhead is included.
 
 Smoke matrices may use fewer rounds, but their records remain smoke/pilot evidence and cannot be pooled with formal data.
+
+## Week 5 CQ2 matrices
+
+`experiments/week5-cq2/` freezes `P=8` and the four distinct effective choices `1/P/4P/W`. The two anchor matrices contrast expensive low-conflict work with a cheap single-key hotspot chain. Boundary matrices hold seed, transaction count, compute distribution, workers, and all non-CQ2 controls fixed while changing only `key_space` from 1 through 3. `linux-formal-template.json` is intentionally invalid until its target-host controls are replaced; it must not be weakened to run on macOS.

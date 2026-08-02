@@ -62,6 +62,9 @@ func (e *Engine) ExecuteBlock(
 	if config.Executors != 0 && config.Executors != 1 {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, engineapi.ErrInvalidWorkers
 	}
+	if config.MaxSpeculativeInflight < 0 || config.MaxSpeculativeInflight > 1 {
+		return model.BlockResult{}, control.Trace{Engine: engineName}, engineapi.ErrInvalidSpeculationLimit
+	}
 	if err := ctx.Err(); err != nil {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, err
 	}
@@ -163,6 +166,11 @@ func (e *Engine) ExecuteBlock(
 	if traceMode != control.TraceOff {
 		finalTrace.WorkAvailable = true
 		finalTrace.Work.ExecutionAttempts = uint64(len(result.Transactions))
+		finalTrace.Work.SpeculationLimit = 1
+		finalTrace.Work.SpeculationTelemetryAvailable = true
+		if len(result.Transactions) > 0 {
+			finalTrace.Work.PeakSpeculativeInflight = 1
+		}
 		for _, transaction := range result.Transactions {
 			finalTrace.Work.UsefulExecutionUnits += transaction.UnitsUsed
 		}

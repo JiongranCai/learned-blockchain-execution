@@ -110,6 +110,109 @@ func TestGeneratedArtifactsMatchAcrossSeedsAndWorkers(t *testing.T) {
 	}
 }
 
+func TestFiniteSpeculationLimitsMatchSerialAcrossSeedsAndWorkers(t *testing.T) {
+	for seed := int64(0); seed < 4; seed++ {
+		artifact, err := synthetic.Generate(synthetic.Config{
+			Seed:                 seed + 100,
+			InitialKeys:          16,
+			KeySpace:             int(seed%4) + 1,
+			BlockCount:           2,
+			TransactionsPerBlock: 32,
+			MaxComputeUnits:      64,
+			TransactionMaxUnits:  68,
+			FailureEvery:         9,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, workers := range []int{2, 4, 8} {
+			for _, limit := range []int{1, 2, 3, workers, workers * 4, 0} {
+				t.Run(fmt.Sprintf("seed-%d-workers-%d-limit-%d", seed, workers, limit), func(t *testing.T) {
+					serialState, err := artifact.NewState()
+					if err != nil {
+						t.Fatal(err)
+					}
+					candidateState, err := artifact.NewState()
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, block := range artifact.OrderedBlocks {
+						oracle, _, err := serial.New(nil).ExecuteBlock(
+							context.Background(), block, serialState, engineapi.RunConfig{Executors: 1},
+						)
+						if err != nil {
+							t.Fatal(err)
+						}
+						candidate, _, err := blockstm.New(nil).ExecuteBlock(
+							context.Background(), block, candidateState,
+							engineapi.RunConfig{Executors: workers, MaxSpeculativeInflight: limit},
+						)
+						if err != nil {
+							t.Fatal(err)
+						}
+						assertEquivalent(t, oracle, candidate, serialState, candidateState)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestFiniteSpeculationLimitEmitsBoundedAdmissionTelemetry(t *testing.T) {
+	artifact, err := synthetic.Generate(synthetic.Config{
+		Seed:                 808,
+		InitialKeys:          4,
+		KeySpace:             1,
+		BlockCount:           1,
+		TransactionsPerBlock: 64,
+		MaxComputeUnits:      128,
+		TransactionMaxUnits:  132,
+		FailureEvery:         0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialState, err := artifact.NewState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oracle, _, err := serial.New(nil).ExecuteBlock(
+		context.Background(), artifact.OrderedBlocks[0], serialState,
+		engineapi.RunConfig{Executors: 1, TraceMode: control.TraceCounters},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateState, err := artifact.NewState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, trace, err := blockstm.New(nil).ExecuteBlock(
+		context.Background(), artifact.OrderedBlocks[0], candidateState,
+		engineapi.RunConfig{Executors: 8, MaxSpeculativeInflight: 4, TraceMode: control.TraceCounters},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertEquivalent(t, oracle, candidate, serialState, candidateState)
+	if !trace.WorkAvailable || !trace.Work.SpeculationLimitApplied || !trace.Work.SpeculationTelemetryAvailable ||
+		trace.Work.SpeculationLimit != 4 || trace.Work.PeakSpeculativeInflight == 0 || trace.Work.PeakSpeculativeInflight > 4 ||
+		trace.Work.AdmissionStallEvents == 0 || trace.Work.AdmissionStallNS == 0 {
+		t.Fatalf("invalid CQ2 telemetry: %#v", trace.Work)
+	}
+}
+
+func TestEngineRejectsNegativeSpeculationLimit(t *testing.T) {
+	storage := mustState(t, []model.StateEntry{{Key: []byte("hot"), Value: flat.EncodeInt64(0)}})
+	_, _, err := blockstm.New(nil).ExecuteBlock(
+		context.Background(), adversarialBlock(), storage,
+		engineapi.RunConfig{Executors: 2, MaxSpeculativeInflight: -1},
+	)
+	if !errors.Is(err, engineapi.ErrInvalidSpeculationLimit) {
+		t.Fatalf("got %v, want invalid speculation limit", err)
+	}
+}
+
 func TestCancellationAndUnsupportedPolicyDoNotPublishState(t *testing.T) {
 	initial := []model.StateEntry{{Key: []byte("hot"), Value: flat.EncodeInt64(0)}}
 	block := adversarialBlock()

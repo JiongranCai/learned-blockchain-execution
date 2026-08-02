@@ -26,6 +26,9 @@ func TestValidateAndRunUseFrozenBundleAndVersionedTelemetry(t *testing.T) {
 	if len(bundle.ValidatedCases) != 3 || bundle.ResultDigest == "" || bundle.WorkloadHash != testArtifactHash {
 		t.Fatalf("unexpected validation bundle: %#v", bundle)
 	}
+	if bundle.ValidatedCases[0].MaxSpeculativeInflight != 2 || bundle.ValidatedCases[2].MaxSpeculativeInflight != 1 {
+		t.Fatalf("validation bundle did not bind CQ2 limits: %#v", bundle.ValidatedCases)
+	}
 
 	response, err := experiment.RunWorker(context.Background(), loaded, experiment.WorkerRequest{
 		CaseID: "detailed",
@@ -38,6 +41,10 @@ func TestValidateAndRunUseFrozenBundleAndVersionedTelemetry(t *testing.T) {
 	}
 	if response.Record.SchemaVersion != telemetry.BenchmarkRecordSchema || !response.Record.CanonicalMatch || response.Record.ResultDigest != bundle.ResultDigest {
 		t.Fatalf("unexpected benchmark record: %#v", response.Record)
+	}
+	if response.Record.Case.MaxSpeculativeInflight != 1 || response.Record.Metrics.EffectiveSpeculationLimit != 1 ||
+		!response.Record.Metrics.SpeculationLimitApplied || !response.Record.Metrics.SpeculationTelemetryAvailable {
+		t.Fatalf("CQ2 case/metrics are incomplete: %#v", response.Record)
 	}
 	if response.Record.Provenance.ProcessID == 0 || len(response.Record.Provenance.BinarySHA256) != 64 ||
 		len(response.Record.Capabilities.Events) != len(control.EventRegistry()) {
@@ -110,7 +117,7 @@ func TestRunPreservesFailureRecord(t *testing.T) {
 func TestConfigParserRejectsUnknownFieldsAndUnfrozenFormalEnvironment(t *testing.T) {
 	directory := t.TempDir()
 	unknownPath := filepath.Join(directory, "unknown.json")
-	if err := os.WriteFile(unknownPath, []byte(`{"schema_version":"experiment-matrix-v1","unknown":true}`), 0o600); err != nil {
+	if err := os.WriteFile(unknownPath, []byte(`{"schema_version":"experiment-matrix-v2","unknown":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := experiment.LoadConfig(unknownPath); !errors.Is(err, experiment.ErrInvalidConfig) {
@@ -126,6 +133,24 @@ func TestConfigParserRejectsUnknownFieldsAndUnfrozenFormalEnvironment(t *testing
 	writeJSONFile(t, loaded.Path, config)
 	if _, err := experiment.LoadConfig(loaded.Path); !errors.Is(err, experiment.ErrInvalidConfig) {
 		t.Fatalf("unfrozen formal environment: got %v", err)
+	}
+
+	loaded = writeTestConfig(t)
+	config = loaded.Config
+	config.Cases[0].MaxSpeculativeInflight = -1
+	writeJSONFile(t, loaded.Path, config)
+	if _, err := experiment.LoadConfig(loaded.Path); !errors.Is(err, experiment.ErrInvalidConfig) {
+		t.Fatalf("negative CQ2 limit: got %v", err)
+	}
+
+	loaded = writeTestConfig(t)
+	config = loaded.Config
+	config.Cases[0].Engine = "serial"
+	config.Cases[0].Policy = "serial_preset"
+	config.Cases[0].MaxSpeculativeInflight = 2
+	writeJSONFile(t, loaded.Path, config)
+	if _, err := experiment.LoadConfig(loaded.Path); !errors.Is(err, experiment.ErrInvalidConfig) {
+		t.Fatalf("serial CQ2 limit: got %v", err)
 	}
 }
 
@@ -185,9 +210,9 @@ func writeTestConfig(t *testing.T) experiment.LoadedConfig {
 			ProcessReuse: "fresh_process_per_run",
 		},
 		Cases: []experiment.CaseConfig{
-			{ID: "off", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, TraceMode: control.TraceOff},
-			{ID: "counters", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, TraceMode: control.TraceCounters},
-			{ID: "detailed", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, TraceMode: control.TraceDetailed},
+			{ID: "off", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, MaxSpeculativeInflight: 2, TraceMode: control.TraceOff},
+			{ID: "counters", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, MaxSpeculativeInflight: 2, TraceMode: control.TraceCounters},
+			{ID: "detailed", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, MaxSpeculativeInflight: 1, TraceMode: control.TraceDetailed},
 		},
 		Output: experiment.OutputConfig{
 			ValidationBundle:  filepath.Join(directory, "validation-bundle.json"),

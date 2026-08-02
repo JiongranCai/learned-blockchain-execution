@@ -85,11 +85,12 @@ func Execute(ctx context.Context, artifact workload.Artifact, experimentCase Cas
 	for _, block := range input.OrderedBlocks {
 		started := time.Now()
 		result, trace, executeErr := selectedEngine.ExecuteBlock(ctx, block, storage, engineapi.RunConfig{
-			Executors:        experimentCase.Executors,
-			EpochID:          input.ArtifactHash,
-			Policy:           selectedPolicy,
-			TraceMode:        experimentCase.TraceMode,
-			OmitResultDigest: omitDigest,
+			Executors:              experimentCase.Executors,
+			EpochID:                input.ArtifactHash,
+			Policy:                 selectedPolicy,
+			TraceMode:              experimentCase.TraceMode,
+			MaxSpeculativeInflight: experimentCase.MaxSpeculativeInflight,
+			OmitResultDigest:       omitDigest,
 		})
 		elapsed := uint64(time.Since(started))
 		execution.ExecutionNS += elapsed

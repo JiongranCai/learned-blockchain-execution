@@ -66,6 +66,9 @@ func (e *Engine) ExecuteBlock(
 	if config.Executors < 0 {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, engineapi.ErrInvalidWorkers
 	}
+	if config.MaxSpeculativeInflight < 0 {
+		return model.BlockResult{}, control.Trace{Engine: engineName}, engineapi.ErrInvalidSpeculationLimit
+	}
 	if err := ctx.Err(); err != nil {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, err
 	}
@@ -180,12 +183,13 @@ func (e *Engine) ExecuteBlock(
 		slots[transactionIndex].store(incarnation, txResult, traceMode != control.TraceOff)
 	}
 
-	err = kernel.ExecuteBlock(
+	speculation, err := kernel.ExecuteBlockWithMaxSpeculativeInflight(
 		executionCtx,
 		len(block.Transactions),
 		e.stores,
 		kernelStorage,
 		config.Executors,
+		config.MaxSpeculativeInflight,
 		txExecutor,
 	)
 	if executionErr := executionErrors.get(); executionErr != nil {
@@ -229,6 +233,12 @@ func (e *Engine) ExecuteBlock(
 	finalTrace := trace()
 	if traceMode != control.TraceOff {
 		finalTrace.WorkAvailable = true
+		finalTrace.Work.SpeculationLimit = speculation.EffectiveLimit
+		finalTrace.Work.SpeculationLimitApplied = speculation.LimitApplied
+		finalTrace.Work.SpeculationTelemetryAvailable = speculation.TelemetryAvailable
+		finalTrace.Work.PeakSpeculativeInflight = speculation.PeakInflight
+		finalTrace.Work.AdmissionStallEvents = speculation.AdmissionStallEvents
+		finalTrace.Work.AdmissionStallNS = speculation.AdmissionStallNS
 		for index := range slots {
 			addWorkCounters(&finalTrace.Work, slots[index].work())
 		}
