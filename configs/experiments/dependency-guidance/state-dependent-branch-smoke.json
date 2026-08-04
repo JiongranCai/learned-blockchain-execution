@@ -1,0 +1,78 @@
+{
+  "schema_version": "experiment-matrix-v3",
+  "run_class": "smoke",
+  "workload": {
+    "synthetic": {
+      "seed": 20260803,
+      "initial_keys": 256,
+      "key_space": 32,
+      "block_count": 1,
+      "transactions_per_block": 512,
+      "max_compute_units": 2000,
+      "transaction_max_units": 2007,
+      "failure_every": 0,
+      "program_shape": "state_dependent_branch"
+    },
+    "expected_hash": "e83f491469ab74130daf56f67a303ec8ce687ced5407fccdd5e90b45e66c2ba3"
+  },
+  "statistical_protocol": "configs/statistical/protocol-v1.json",
+  "warmup_rounds": 2,
+  "measurement_rounds": 10,
+  "order_seed": 20260803,
+  "timeout": "2m",
+  "environment": {
+    "affinity": "uncontrolled_mac_pilot",
+    "numa_policy": "uncontrolled_mac_pilot",
+    "state_reset": "fresh_state_from_frozen_artifact",
+    "page_cache": "unchanged_and_recorded_as_smoke",
+    "process_reuse": "fresh_process_per_run"
+  },
+  "cases": [
+    {
+      "id": "runtime",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_information": "runtime_observed",
+      "trace_mode": "counters"
+    },
+    {
+      "id": "declared-dag",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "declared_dag",
+      "dependency_information": "static_program",
+      "trace_mode": "counters"
+    },
+    {
+      "id": "summary",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "summary",
+      "dependency_information": "static_program",
+      "trace_mode": "counters"
+    },
+    {
+      "id": "full-graph",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "full_graph",
+      "dependency_information": "static_program",
+      "trace_mode": "counters"
+    }
+  ],
+  "output": {
+    "validation_bundle": "results/dependency-guidance/state-dependent-branch/validation-bundle.json",
+    "validation_records": "results/dependency-guidance/state-dependent-branch/validation.jsonl",
+    "run_records": "results/dependency-guidance/state-dependent-branch/runs.jsonl",
+    "action_traces": "results/dependency-guidance/state-dependent-branch/action-traces.jsonl"
+  }
+}

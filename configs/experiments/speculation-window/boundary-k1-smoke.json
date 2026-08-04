@@ -1,0 +1,77 @@
+{
+  "schema_version": "experiment-matrix-v3",
+  "run_class": "smoke",
+  "workload": {
+    "synthetic": {
+      "seed": 20260802,
+      "initial_keys": 512,
+      "key_space": 1,
+      "block_count": 1,
+      "transactions_per_block": 512,
+      "max_compute_units": 5000,
+      "transaction_max_units": 5004,
+      "failure_every": 0
+    },
+    "expected_hash": "a006c0ec32f057f1287f86bd94af18ab9f2efbfd6087f247be46a43f1bf0a4bd"
+  },
+  "statistical_protocol": "configs/statistical/protocol-v1.json",
+  "warmup_rounds": 2,
+  "measurement_rounds": 10,
+  "order_seed": 20260802,
+  "timeout": "2m",
+  "environment": {
+    "affinity": "uncontrolled_mac_pilot",
+    "numa_policy": "uncontrolled_mac_pilot",
+    "state_reset": "fresh_state_from_frozen_artifact",
+    "page_cache": "unchanged_and_recorded_as_smoke",
+    "process_reuse": "fresh_process_per_run"
+  },
+  "cases": [
+    {
+      "id": "limit-1",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 1,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_information": "runtime_observed",
+      "trace_mode": "counters"
+    },
+    {
+      "id": "limit-p",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 8,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_information": "runtime_observed",
+      "trace_mode": "counters"
+    },
+    {
+      "id": "limit-4p",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 32,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_information": "runtime_observed",
+      "trace_mode": "counters"
+    },
+    {
+      "id": "limit-w",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_information": "runtime_observed",
+      "trace_mode": "counters"
+    }
+  ],
+  "output": {
+    "validation_bundle": "results/speculation-window/boundary-k1/validation-bundle.json",
+    "validation_records": "results/speculation-window/boundary-k1/validation.jsonl",
+    "run_records": "results/speculation-window/boundary-k1/runs.jsonl",
+    "action_traces": "results/speculation-window/boundary-k1/action-traces.jsonl"
+  }
+}
