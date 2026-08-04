@@ -110,6 +110,122 @@ func TestGeneratedArtifactHasDeterministicSerialResults(t *testing.T) {
 	}
 }
 
+func TestHotspotAccessDistributionIsDeterministicAndKeepsAColdTail(t *testing.T) {
+	config := testConfig()
+	config.InitialKeys = 1_000
+	config.KeySpace = 1_000
+	config.BlockCount = 1
+	config.TransactionsPerBlock = 5_000
+	config.FailureEvery = 0
+	config.AccessDistribution = &synthetic.AccessDistributionConfig{
+		Kind:                 synthetic.AccessDistributionHotspot,
+		HotKeyCount:          4,
+		HotAccessProbability: 0.9,
+	}
+
+	first, err := synthetic.Generate(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := synthetic.Generate(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.CanonicalHash != second.CanonicalHash {
+		t.Fatalf("hotspot workload is not deterministic: %s != %s", first.CanonicalHash, second.CanonicalHash)
+	}
+	if first.Generator.Version != synthetic.GeneratorVersionV2 {
+		t.Fatalf("got generator version %q", first.Generator.Version)
+	}
+
+	hotKeys := map[string]struct{}{
+		"key-00000000": {},
+		"key-00000001": {},
+		"key-00000002": {},
+		"key-00000003": {},
+	}
+	hot, cold := 0, 0
+	for _, truth := range first.GroundTruth {
+		for _, access := range truth.Accesses {
+			if _, ok := hotKeys[string(access.Key)]; ok {
+				hot++
+			} else {
+				cold++
+			}
+		}
+	}
+	ratio := float64(hot) / float64(hot+cold)
+	if ratio < 0.88 || ratio > 0.92 {
+		t.Fatalf("hot access ratio %f is inconsistent with configured probability", ratio)
+	}
+	if cold == 0 {
+		t.Fatal("hotspot workload did not retain cold-tail accesses")
+	}
+}
+
+func TestComputeRangeCanBeFixed(t *testing.T) {
+	config := testConfig()
+	config.MinComputeUnits = config.MaxComputeUnits
+	artifact, err := synthetic.Generate(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Generator.Version != synthetic.GeneratorVersionV2 {
+		t.Fatalf("got generator version %q", artifact.Generator.Version)
+	}
+	for _, block := range artifact.OrderedBlocks {
+		for _, transaction := range block.Transactions {
+			for _, instruction := range transaction.Program.Instructions {
+				if instruction.Op == model.OpCompute && instruction.ComputeUnits != config.MaxComputeUnits {
+					t.Fatalf("got compute units %d, want %d", instruction.ComputeUnits, config.MaxComputeUnits)
+				}
+			}
+		}
+	}
+}
+
+func TestAccessDistributionCanCorrelateReadAndWriteKeys(t *testing.T) {
+	config := testConfig()
+	config.InitialKeys = 1_000
+	config.KeySpace = 1_000
+	config.AccessDistribution = &synthetic.AccessDistributionConfig{
+		Kind:                        synthetic.AccessDistributionHotspot,
+		HotKeyCount:                 8,
+		HotAccessProbability:        0.9,
+		ReadWriteSameKeyProbability: 1,
+	}
+	artifact, err := synthetic.Generate(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, truth := range artifact.GroundTruth {
+		if len(truth.Accesses) != 2 || string(truth.Accesses[0].Key) != string(truth.Accesses[1].Key) {
+			t.Fatalf("transaction %s does not read and write the same key: %#v", truth.TransactionID, truth.Accesses)
+		}
+	}
+}
+
+func TestStateDependentCorrelationUsesTheExecutedBranchRead(t *testing.T) {
+	config := testConfig()
+	config.InitialKeys = 16
+	config.KeySpace = 8
+	config.ProgramShape = synthetic.ProgramShapeStateDependentBranch
+	config.TransactionMaxUnits = config.MaxComputeUnits + 7
+	config.AccessDistribution = &synthetic.AccessDistributionConfig{
+		Kind:                        synthetic.AccessDistributionUniform,
+		ReadWriteSameKeyProbability: 1,
+	}
+	artifact, err := synthetic.Generate(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, truth := range artifact.GroundTruth {
+		if len(truth.Accesses) != 3 || string(truth.Accesses[1].Key) != string(truth.Accesses[2].Key) {
+			t.Fatalf("transaction %s write does not match its executed branch read: %#v", truth.TransactionID, truth.Accesses)
+		}
+	}
+}
+
 func TestGeneratedArtifactFreezesLogicalIDsAndInformationBoundary(t *testing.T) {
 	artifact, err := synthetic.Generate(testConfig())
 	if err != nil {
@@ -224,7 +340,68 @@ func TestGenerateRejectsInvalidConfig(t *testing.T) {
 		{"block count", func(c *synthetic.Config) { c.BlockCount = 0 }, synthetic.ErrInvalidBlockCount},
 		{"transactions", func(c *synthetic.Config) { c.TransactionsPerBlock = 0 }, synthetic.ErrInvalidTransactions},
 		{"negative failure interval", func(c *synthetic.Config) { c.FailureEvery = -1 }, synthetic.ErrInvalidFailureInterval},
+		{"compute range", func(c *synthetic.Config) { c.MinComputeUnits = c.MaxComputeUnits + 1 }, synthetic.ErrInvalidComputeRange},
 		{"unknown program shape", func(c *synthetic.Config) { c.ProgramShape = "unknown" }, synthetic.ErrInvalidProgramShape},
+		{"unknown access distribution", func(c *synthetic.Config) {
+			c.AccessDistribution = &synthetic.AccessDistributionConfig{Kind: "unknown"}
+		}, synthetic.ErrInvalidAccessDistribution},
+		{"uniform with hotspot fields", func(c *synthetic.Config) {
+			c.AccessDistribution = &synthetic.AccessDistributionConfig{
+				Kind:        synthetic.AccessDistributionUniform,
+				HotKeyCount: 1,
+			}
+		}, synthetic.ErrInvalidAccessDistribution},
+		{"hot key count zero", func(c *synthetic.Config) {
+			c.AccessDistribution = &synthetic.AccessDistributionConfig{
+				Kind:                 synthetic.AccessDistributionHotspot,
+				HotAccessProbability: 0.9,
+			}
+		}, synthetic.ErrInvalidHotKeyCount},
+		{"hot key count covers key space", func(c *synthetic.Config) {
+			c.AccessDistribution = &synthetic.AccessDistributionConfig{
+				Kind:                 synthetic.AccessDistributionHotspot,
+				HotKeyCount:          c.KeySpace,
+				HotAccessProbability: 0.9,
+			}
+		}, synthetic.ErrInvalidHotKeyCount},
+		{"hot probability zero", func(c *synthetic.Config) {
+			c.AccessDistribution = &synthetic.AccessDistributionConfig{
+				Kind:        synthetic.AccessDistributionHotspot,
+				HotKeyCount: 1,
+			}
+		}, synthetic.ErrInvalidHotProbability},
+		{"hot probability one", func(c *synthetic.Config) {
+			c.AccessDistribution = &synthetic.AccessDistributionConfig{
+				Kind:                 synthetic.AccessDistributionHotspot,
+				HotKeyCount:          1,
+				HotAccessProbability: 1,
+			}
+		}, synthetic.ErrInvalidHotProbability},
+		{"hot probability NaN", func(c *synthetic.Config) {
+			c.AccessDistribution = &synthetic.AccessDistributionConfig{
+				Kind:                 synthetic.AccessDistributionHotspot,
+				HotKeyCount:          1,
+				HotAccessProbability: math.NaN(),
+			}
+		}, synthetic.ErrInvalidHotProbability},
+		{"read/write correlation negative", func(c *synthetic.Config) {
+			c.AccessDistribution = &synthetic.AccessDistributionConfig{
+				Kind:                        synthetic.AccessDistributionUniform,
+				ReadWriteSameKeyProbability: -0.1,
+			}
+		}, synthetic.ErrInvalidReadWriteCorrelation},
+		{"read/write correlation above one", func(c *synthetic.Config) {
+			c.AccessDistribution = &synthetic.AccessDistributionConfig{
+				Kind:                        synthetic.AccessDistributionUniform,
+				ReadWriteSameKeyProbability: 1.1,
+			}
+		}, synthetic.ErrInvalidReadWriteCorrelation},
+		{"read/write correlation NaN", func(c *synthetic.Config) {
+			c.AccessDistribution = &synthetic.AccessDistributionConfig{
+				Kind:                        synthetic.AccessDistributionUniform,
+				ReadWriteSameKeyProbability: math.NaN(),
+			}
+		}, synthetic.ErrInvalidReadWriteCorrelation},
 		{"branch selector key space", func(c *synthetic.Config) {
 			c.ProgramShape = synthetic.ProgramShapeStateDependentBranch
 			c.KeySpace = c.InitialKeys

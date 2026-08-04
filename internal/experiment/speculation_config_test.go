@@ -15,6 +15,7 @@ func TestSpeculationMatricesFreezeDistinctLimitsAndWorkloads(t *testing.T) {
 		"boundary-k1-smoke.json",
 		"boundary-k2-smoke.json",
 		"boundary-k3-smoke.json",
+		"hotspot-cold-tail-smoke.json",
 	}
 	for _, name := range paths {
 		t.Run(name, func(t *testing.T) {
@@ -54,6 +55,30 @@ func TestSpeculationMatricesFreezeDistinctLimitsAndWorkloads(t *testing.T) {
 				t.Fatalf("got %d Block-STM cases and %d distinct limits, want four", blockSTMCount, len(seen))
 			}
 		})
+	}
+}
+
+func TestHotspotColdTailMatrixKeepsLargeKeySpaceAndExplicitDistribution(t *testing.T) {
+	path := filepath.Join("..", "..", "configs", "experiments", "speculation-window", "hotspot-cold-tail-smoke.json")
+	loaded, err := experiment.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := loaded.Config.Workload.Synthetic
+	if config == nil || config.KeySpace != 8192 || config.AccessDistribution == nil {
+		t.Fatalf("hotspot workload is incomplete: %#v", config)
+	}
+	distribution := config.AccessDistribution
+	if distribution.Kind != "hotspot" || distribution.HotKeyCount != 8 || distribution.HotAccessProbability != 0.9 ||
+		distribution.ReadWriteSameKeyProbability != 0.75 {
+		t.Fatalf("unexpected hotspot distribution: %#v", distribution)
+	}
+	artifact, err := experiment.LoadWorkload(loaded.Config.Workload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Generator.Version != "synthetic-v2" {
+		t.Fatalf("got generator version %q", artifact.Generator.Version)
 	}
 }
 

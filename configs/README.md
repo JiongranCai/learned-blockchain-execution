@@ -6,6 +6,20 @@
 
 `max_speculative_inflight` is the static admission budget. Zero selects the original full-block window `W`; a positive value is reduced to `min(L,W)` for each block. The worker count remains fixed while `L` changes. A transaction occupies one slot until it enters the continuous stable validated frontier, including suspension and every incarnation; reexecution does not acquire another slot.
 
+Synthetic workloads default to the legacy uniform key distribution. Setting
+`access_distribution.kind` to `hotspot` divides the configured `key_space`
+into the first `hot_key_count` hot keys and a cold tail; each read and write
+independently selects the hot set with `hot_access_probability`, then samples
+uniformly inside the selected set. This expresses a large address space with a
+small hot working set without collapsing all cold keys into the hotspot.
+`min_compute_units` optionally changes the legacy `[0, max_compute_units]`
+uniform compute range to `[min_compute_units, max_compute_units]`; setting the
+minimum equal to the maximum produces fixed-cost transactions and separates
+compute-time skew from access skew.
+`access_distribution.read_write_same_key_probability` controls read/write
+correlation independently of hot-set selection. Zero preserves independent
+sampling; one models a read-modify-write against the same selected key.
+
 Dependency acquisition and dependency use are represented by separate fields so information cost cannot be hidden inside a mechanism label:
 
 - `dependency_information ∈ {runtime_observed, static_program}` selects acquisition. `static_program` scans only engine-visible transaction programs inside the timed interval and never reads workload ground truth.
@@ -39,7 +53,7 @@ Smoke matrices may use fewer rounds, but their records remain pilot evidence and
 
 `experiments/baseline/` exercises the serial oracle, Block-STM adapter, validation bundle, telemetry modes, and isolated runner process. Its Linux formal template remains intentionally invalid until target-host controls are frozen.
 
-`experiments/speculation-window/` freezes `P=8` and compares the distinct effective admission choices `1/P/4P/W`. The anchor matrices contrast expensive low-conflict work with a cheap single-key hotspot chain. Boundary matrices keep the seed, transaction count, compute distribution, workers, and all other controls fixed while changing only `key_space` from 1 through 3.
+`experiments/speculation-window/` freezes `P=8` and compares the distinct effective admission choices `1/P/4P/W`. The anchor matrices contrast expensive low-conflict work with a cheap single-key hotspot chain. Boundary matrices keep the seed, transaction count, compute distribution, workers, and all other controls fixed while changing only `key_space` from 1 through 3. The hotspot/cold-tail matrix keeps `key_space=8192` while concentrating accesses on a small hot head and explicitly controlling read/write correlation.
 
 `experiments/dependency-guidance/` contains three comparison families:
 

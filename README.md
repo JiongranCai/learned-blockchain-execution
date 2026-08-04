@@ -9,7 +9,7 @@ The current implementation focuses on a reproducible motivation and systems-eval
 - A frozen [`crypto-org-chain/go-block-stm`](https://github.com/crypto-org-chain/go-block-stm) execution kernel at commit `7afe924fb4a611a2626f92338f1f76e4ebefa62f`.
 - A deterministic flat transaction runtime, in-memory state implementation, and preset-order serial oracle.
 - A common engine and policy interface shared by serial execution and Block-STM.
-- Seeded synthetic workloads with hash-sealed artifacts, stable operation identifiers, state-dependent branches, and an explicit boundary between engine-visible inputs and audit-only ground truth.
+- Seeded synthetic workloads with hash-sealed artifacts, configurable uniform or hotspot/cold-tail key-access distributions, stable operation identifiers, state-dependent branches, and an explicit boundary between engine-visible inputs and audit-only ground truth.
 - A configurable speculation window through `max_speculative_inflight`.
 - Dependency-information controls that separate information acquisition from representation and use:
   - `mvcc_runtime` discovers conflicts during execution;

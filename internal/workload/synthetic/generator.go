@@ -13,33 +13,51 @@ import (
 )
 
 const (
-	GeneratorName    = "synthetic"
-	GeneratorVersion = "synthetic-v1"
+	GeneratorName      = "synthetic"
+	GeneratorVersion   = "synthetic-v1"
+	GeneratorVersionV2 = "synthetic-v2"
+
+	AccessDistributionUniform = "uniform"
+	AccessDistributionHotspot = "hotspot"
 )
 
 var (
-	ErrInvalidInitialKeys       = errors.New("initial_keys must be positive")
-	ErrInvalidKeySpace          = errors.New("key_space must be in [1, initial_keys]")
-	ErrInvalidBlockCount        = errors.New("block_count must be positive")
-	ErrInvalidTransactions      = errors.New("transactions_per_block must be positive")
-	ErrInvalidTransactionBudget = errors.New("transaction_max_units is too small")
-	ErrInvalidFailureInterval   = errors.New("failure_every must be non-negative")
-	ErrInvalidProgramShape      = errors.New("unsupported synthetic program_shape")
-	ErrBranchKeySpace           = errors.New("state_dependent_branch requires initial_keys greater than key_space")
+	ErrInvalidInitialKeys          = errors.New("initial_keys must be positive")
+	ErrInvalidKeySpace             = errors.New("key_space must be in [1, initial_keys]")
+	ErrInvalidBlockCount           = errors.New("block_count must be positive")
+	ErrInvalidTransactions         = errors.New("transactions_per_block must be positive")
+	ErrInvalidTransactionBudget    = errors.New("transaction_max_units is too small")
+	ErrInvalidComputeRange         = errors.New("min_compute_units must not exceed max_compute_units")
+	ErrInvalidFailureInterval      = errors.New("failure_every must be non-negative")
+	ErrInvalidProgramShape         = errors.New("unsupported synthetic program_shape")
+	ErrBranchKeySpace              = errors.New("state_dependent_branch requires initial_keys greater than key_space")
+	ErrInvalidAccessDistribution   = errors.New("unsupported access_distribution kind")
+	ErrInvalidHotKeyCount          = errors.New("hot_key_count must be in [1, key_space-1]")
+	ErrInvalidHotProbability       = errors.New("hot_access_probability must be strictly between 0 and 1")
+	ErrInvalidReadWriteCorrelation = errors.New("read_write_same_key_probability must be in [0, 1]")
 )
 
 const ProgramShapeStateDependentBranch = "state_dependent_branch"
 
 type Config struct {
-	Seed                 int64  `json:"seed"`
-	InitialKeys          int    `json:"initial_keys"`
-	KeySpace             int    `json:"key_space"`
-	BlockCount           int    `json:"block_count"`
-	TransactionsPerBlock int    `json:"transactions_per_block"`
-	MaxComputeUnits      uint64 `json:"max_compute_units"`
-	TransactionMaxUnits  uint64 `json:"transaction_max_units"`
-	FailureEvery         int    `json:"failure_every"`
-	ProgramShape         string `json:"program_shape,omitempty"`
+	Seed                 int64                     `json:"seed"`
+	InitialKeys          int                       `json:"initial_keys"`
+	KeySpace             int                       `json:"key_space"`
+	BlockCount           int                       `json:"block_count"`
+	TransactionsPerBlock int                       `json:"transactions_per_block"`
+	MaxComputeUnits      uint64                    `json:"max_compute_units"`
+	MinComputeUnits      uint64                    `json:"min_compute_units,omitempty"`
+	TransactionMaxUnits  uint64                    `json:"transaction_max_units"`
+	FailureEvery         int                       `json:"failure_every"`
+	ProgramShape         string                    `json:"program_shape,omitempty"`
+	AccessDistribution   *AccessDistributionConfig `json:"access_distribution,omitempty"`
+}
+
+type AccessDistributionConfig struct {
+	Kind                        string  `json:"kind"`
+	HotKeyCount                 int     `json:"hot_key_count,omitempty"`
+	HotAccessProbability        float64 `json:"hot_access_probability,omitempty"`
+	ReadWriteSameKeyProbability float64 `json:"read_write_same_key_probability,omitempty"`
 }
 
 func Generate(config Config) (workload.Artifact, error) {
@@ -56,7 +74,7 @@ func Generate(config Config) (workload.Artifact, error) {
 		SchemaVersion: workload.ArtifactSchemaVersion,
 		Generator: workload.GeneratorDescriptor{
 			Name:    GeneratorName,
-			Version: GeneratorVersion,
+			Version: generatorVersion(config),
 			Seed:    config.Seed,
 			Config:  configDescriptor,
 		},
@@ -85,22 +103,30 @@ func Generate(config Config) (workload.Artifact, error) {
 		}
 		for transactionIndex := 0; transactionIndex < config.TransactionsPerBlock; transactionIndex++ {
 			transactionID := fmt.Sprintf("tx-%06d-%06d", blockIndex, transactionIndex)
-			readKey := stateKey(rng.Intn(config.KeySpace))
-			writeKey := stateKey(rng.Intn(config.KeySpace))
+			readKeyIndex := sampleKeyIndex(rng, config)
+			writeKeyIndex, readWriteCorrelated := sampleWriteKeyIndex(rng, config, readKeyIndex)
+			readKey := stateKey(readKeyIndex)
+			writeKey := stateKey(writeKeyIndex)
 			delta := int64(rng.Intn(11) - 5)
-			computeUnits := uint64(0)
-			if config.MaxComputeUnits > 0 {
-				computeUnits = uint64(rng.Int63n(int64(config.MaxComputeUnits + 1)))
+			computeUnits := config.MinComputeUnits
+			if config.MaxComputeUnits > config.MinComputeUnits {
+				width := config.MaxComputeUnits - config.MinComputeUnits + 1
+				computeUnits += uint64(rng.Int63n(int64(width)))
 			}
 
 			willFail := config.FailureEvery > 0 && (globalTransaction+1)%config.FailureEvery == 0
 			instructions, branchTruth := flatProgram(readKey, writeKey, delta, computeUnits)
 			if config.ProgramShape == ProgramShapeStateDependentBranch {
-				alternateReadKey := stateKey(rng.Intn(config.KeySpace))
+				alternateReadKeyIndex := sampleKeyIndex(rng, config)
+				alternateReadKey := stateKey(alternateReadKeyIndex)
 				selectorIndex := config.KeySpace + rng.Intn(config.InitialKeys-config.KeySpace)
+				branchTaken := initialValues[selectorIndex] < 5_000
+				if readWriteCorrelated && branchTaken {
+					writeKey = stateKey(alternateReadKeyIndex)
+				}
 				instructions, branchTruth = stateDependentBranchProgram(
 					stateKey(selectorIndex),
-					initialValues[selectorIndex] < 5_000,
+					branchTaken,
 					readKey,
 					alternateReadKey,
 					writeKey,
@@ -182,11 +208,17 @@ func validateConfig(config Config) error {
 	if config.FailureEvery < 0 {
 		return ErrInvalidFailureInterval
 	}
+	if config.MinComputeUnits > config.MaxComputeUnits {
+		return ErrInvalidComputeRange
+	}
 	if config.ProgramShape != "" && config.ProgramShape != ProgramShapeStateDependentBranch {
 		return ErrInvalidProgramShape
 	}
 	if config.ProgramShape == ProgramShapeStateDependentBranch && config.InitialKeys <= config.KeySpace {
 		return ErrBranchKeySpace
+	}
+	if err := validateAccessDistribution(config); err != nil {
+		return err
 	}
 	// Int63n needs MaxComputeUnits+1 to remain a positive int64. This also
 	// leaves ample room for the fixed per-transaction instruction costs.
@@ -201,6 +233,61 @@ func validateConfig(config Config) error {
 		return ErrInvalidTransactionBudget
 	}
 	return nil
+}
+
+func validateAccessDistribution(config Config) error {
+	distribution := config.AccessDistribution
+	if distribution == nil {
+		return nil
+	}
+	if math.IsNaN(distribution.ReadWriteSameKeyProbability) ||
+		distribution.ReadWriteSameKeyProbability < 0 || distribution.ReadWriteSameKeyProbability > 1 {
+		return ErrInvalidReadWriteCorrelation
+	}
+	switch distribution.Kind {
+	case AccessDistributionUniform:
+		if distribution.HotKeyCount != 0 || distribution.HotAccessProbability != 0 {
+			return ErrInvalidAccessDistribution
+		}
+	case AccessDistributionHotspot:
+		if distribution.HotKeyCount <= 0 || distribution.HotKeyCount >= config.KeySpace {
+			return ErrInvalidHotKeyCount
+		}
+		if math.IsNaN(distribution.HotAccessProbability) ||
+			distribution.HotAccessProbability <= 0 || distribution.HotAccessProbability >= 1 {
+			return ErrInvalidHotProbability
+		}
+	default:
+		return ErrInvalidAccessDistribution
+	}
+	return nil
+}
+
+func generatorVersion(config Config) string {
+	if config.AccessDistribution != nil || config.MinComputeUnits != 0 {
+		return GeneratorVersionV2
+	}
+	return GeneratorVersion
+}
+
+func sampleKeyIndex(rng *rand.Rand, config Config) int {
+	distribution := config.AccessDistribution
+	if distribution == nil || distribution.Kind == AccessDistributionUniform {
+		return rng.Intn(config.KeySpace)
+	}
+	if rng.Float64() < distribution.HotAccessProbability {
+		return rng.Intn(distribution.HotKeyCount)
+	}
+	return distribution.HotKeyCount + rng.Intn(config.KeySpace-distribution.HotKeyCount)
+}
+
+func sampleWriteKeyIndex(rng *rand.Rand, config Config, readKeyIndex int) (int, bool) {
+	distribution := config.AccessDistribution
+	if distribution != nil && (distribution.ReadWriteSameKeyProbability == 1 ||
+		distribution.ReadWriteSameKeyProbability > 0 && rng.Float64() < distribution.ReadWriteSameKeyProbability) {
+		return readKeyIndex, true
+	}
+	return sampleKeyIndex(rng, config), false
 }
 
 type programTruth struct {
