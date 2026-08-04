@@ -5,7 +5,8 @@
 
 # Generated experiment, build, and diagnostic output
 /tmp/
-/results/
+/results/runs/*/
+/results/archives/*.tar.gz
 /logs/
 /bin/
 /dist/

@@ -1,0 +1,22 @@
+{
+  "schema_version": "local-results-index-v1",
+  "runs": [
+    {
+      "run_id": "2026-08-04-linux-learnexec-metal-01-cf9ad996",
+      "path": "runs/2026-08-04-linux-learnexec-metal-01-cf9ad996",
+      "status": "complete",
+      "run_classes": [
+        "pilot",
+        "formal"
+      ],
+      "source_commit": "cf9ad996f1e6a1b9ade099a04bf3fa10b9afd892",
+      "storage": {
+        "mode": "external_archive",
+        "archive_path": "archives/2026-08-04-linux-learnexec-metal-01-cf9ad996.tar.gz",
+        "archive_size_bytes": 12771403,
+        "archive_sha256": "3a4f726d63605045640651d7bd519a08644cf52dc79f894d4718e735fc1b8ad6"
+      },
+      "formal_report": "runs/2026-08-04-linux-learnexec-metal-01-cf9ad996/formal/REPORT.md"
+    }
+  ]
+}
