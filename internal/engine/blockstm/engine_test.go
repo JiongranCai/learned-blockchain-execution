@@ -198,7 +198,7 @@ func TestFiniteSpeculationLimitEmitsBoundedAdmissionTelemetry(t *testing.T) {
 	if !trace.WorkAvailable || !trace.Work.SpeculationLimitApplied || !trace.Work.SpeculationTelemetryAvailable ||
 		trace.Work.SpeculationLimit != 4 || trace.Work.PeakSpeculativeInflight == 0 || trace.Work.PeakSpeculativeInflight > 4 ||
 		trace.Work.AdmissionStallEvents == 0 || trace.Work.AdmissionStallNS == 0 {
-		t.Fatalf("invalid CQ2 telemetry: %#v", trace.Work)
+		t.Fatalf("invalid speculation telemetry: %#v", trace.Work)
 	}
 }
 

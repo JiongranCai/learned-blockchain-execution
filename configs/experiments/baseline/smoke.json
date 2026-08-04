@@ -1,6 +1,6 @@
 {
-  "schema_version": "experiment-matrix-v2",
-  "run_class": "formal",
+  "schema_version": "experiment-matrix-v3",
+  "run_class": "smoke",
   "workload": {
     "synthetic": {
       "seed": 42,
@@ -15,15 +15,15 @@
     "expected_hash": "6b71316d4076a8d0e27f078e6c52a2f9a042047e88c34ee2ea63792fafbe609d"
   },
   "statistical_protocol": "configs/statistical/protocol-v1.json",
-  "warmup_rounds": 3,
-  "measurement_rounds": 30,
+  "warmup_rounds": 1,
+  "measurement_rounds": 3,
   "order_seed": 20260802,
   "timeout": "2m",
   "environment": {
-    "affinity": "REPLACE_WITH_FROZEN_LINUX_CPUSET",
-    "numa_policy": "REPLACE_WITH_FROZEN_LINUX_NUMA_POLICY",
+    "affinity": "uncontrolled_smoke",
+    "numa_policy": "uncontrolled_smoke",
     "state_reset": "fresh_state_from_frozen_artifact",
-    "page_cache": "REPLACE_WITH_FROZEN_LINUX_PAGE_CACHE_POLICY",
+    "page_cache": "unchanged_and_recorded_as_smoke",
     "process_reuse": "fresh_process_per_run"
   },
   "cases": [
@@ -33,6 +33,8 @@
       "policy": "blockstm_preset",
       "executors": 2,
       "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_information": "runtime_observed",
       "trace_mode": "off"
     },
     {
@@ -41,20 +43,30 @@
       "policy": "blockstm_preset",
       "executors": 2,
       "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_information": "runtime_observed",
       "trace_mode": "counters"
+    },
+    {
+      "id": "blockstm-2-detailed",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 2,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_information": "runtime_observed",
+      "trace_mode": "detailed"
     }
   ],
   "output": {
-    "validation_bundle": "results/week4-linux-formal/validation-bundle.json",
-    "validation_records": "results/week4-linux-formal/validation.jsonl",
-    "run_records": "results/week4-linux-formal/runs.jsonl",
-    "action_traces": "results/week4-linux-formal/action-traces.jsonl"
+    "validation_bundle": "results/baseline/smoke/validation-bundle.json",
+    "validation_records": "results/baseline/smoke/validation.jsonl",
+    "run_records": "results/baseline/smoke/runs.jsonl",
+    "action_traces": "results/baseline/smoke/action-traces.jsonl"
   },
   "telemetry_ablation": {
     "off_case": "blockstm-2-off",
     "instrumented_case": "blockstm-2-counters",
-    "enforce_platforms": [
-      "linux"
-    ]
+    "enforce_platforms": []
   }
 }

@@ -1,130 +1,81 @@
 # Learned Fine-Grained Blockchain Execution
 
-This project explores how learning-based methods can improve blockchain transaction execution by adapting execution strategies to workload characteristics. It aims to identify workload-dependent trade-offs among different execution mechanisms and develop a fine-grained adaptive execution engine that improves performance and resource efficiency while preserving deterministic and correct transaction outcomes.
+This repository is an experimental framework for studying adaptive blockchain transaction execution. The project decomposes execution protocols into independently configurable mechanisms, measures their workload-dependent trade-offs, and provides the deterministic safety substrate needed to combine those mechanisms in a future learned policy.
 
-The long-term goal is to move beyond fixed or coarse-grained execution policies and enable more precise execution decisions for heterogeneous and dynamically changing workloads.
+The current implementation focuses on a reproducible motivation and systems-evaluation platform. It does not yet contain the learned policy itself.
 
-## Frozen execution substrate
+## Current implementation
 
-The implementation starts from [`crypto-org-chain/go-block-stm`](https://github.com/crypto-org-chain/go-block-stm), frozen at commit `7afe924fb4a611a2626f92338f1f76e4ebefa62f` (2024-12-13). The upstream Git history is retained through the `go-block-stm-upstream` remote and the merge commit that imported the code.
+- A frozen [`crypto-org-chain/go-block-stm`](https://github.com/crypto-org-chain/go-block-stm) execution kernel at commit `7afe924fb4a611a2626f92338f1f76e4ebefa62f`.
+- A deterministic flat transaction runtime, in-memory state implementation, and preset-order serial oracle.
+- A common engine and policy interface shared by serial execution and Block-STM.
+- Seeded synthetic workloads with hash-sealed artifacts, stable operation identifiers, state-dependent branches, and an explicit boundary between engine-visible inputs and audit-only ground truth.
+- A configurable speculation window through `max_speculative_inflight`.
+- Dependency-information controls that separate information acquisition from representation and use:
+  - `mvcc_runtime` discovers conflicts during execution;
+  - `declared_dag` waits on direct static read-after-write predecessors;
+  - `summary` uses a compact predecessor barrier;
+  - `full_graph` materializes preset-order read/write conflicts.
+- Differential validation against the serial oracle before a candidate can be benchmarked.
+- Schema-versioned experiment matrices, isolated worker processes, provenance records, action traces, and mechanism-specific telemetry.
 
-The frozen upstream module:
+Static dependency information is treated only as an optimization hint. Guided modes preserve preset transaction order and retain Block-STM read-set validation, deterministic reexecution, and atomic final-state publication. Missing or imprecise guidance can reduce performance, but cannot bypass the correctness path.
 
-- implements the Block-STM algorithm with a preset-order, multi-version execution model;
-- exposes `ExecuteBlock` as its primary API;
-- integrates Cosmos SDK `MultiStore`, including deletion and iteration support;
-- suspends a transaction on an `ESTIMATE` read and resumes it after the blocking incarnation finishes;
-- is licensed under Apache License 2.0 and declares Go 1.21.
+## Repository layout
 
-```go
-type TxExecutor func(TxnIndex, MultiStore)
-
-func ExecuteBlock(
-	ctx context.Context,
-	blockSize int,
-	stores map[storetypes.StoreKey]int,
-	storage MultiStore,
-	executors int,
-	txExecutor TxExecutor,
-) error
+```text
+cmd/bench/                   experiment runner CLI
+configs/                     experiment and statistical contracts
+internal/control/            control types, events, traces, and counters
+internal/engine/             serial and Block-STM engine adapters
+internal/experiment/         validation and benchmark orchestration
+internal/model/              canonical blocks, transactions, and results
+internal/policy/             policy interfaces and fixed presets
+internal/runtime/            deterministic transaction runtime
+internal/state/              state abstractions and in-memory store
+internal/telemetry/          provenance and measurement records
+internal/workload/           workload artifacts and generators
+scripts/                     verification, smoke-run, and summary tools
 ```
 
-The imported code is the experimental kernel, not the final framework. New policy hooks, deterministic workloads, serial differential validation, telemetry, capability guards, and fine-grained recovery will be layered around the shared safety kernel.
+Root-level Go files come from the frozen Block-STM substrate, except for explicitly additive integration files such as `speculation.go`. New framework code lives primarily under `internal/` so the upstream safety kernel remains auditable.
 
-## Serial semantics
+## Build and verify
 
-The Week 2 reference path is implemented under `internal/` without modifying the frozen upstream kernel:
-
-- `model` defines typed blocks, transactions, flat instructions, results, and the schema-versioned canonical digest;
-- `state/memkv` provides cloned byte ownership, key-sorted snapshots, and transaction-local overlays;
-- `runtime/flat` executes deterministic integer programs with reads, writes, deletes, fixed-cost compute, conditions, jumps, explicit failure, and return;
-- `engine/serial` executes transactions in preset order and is the correctness oracle for later parallel engines;
-- `workload` defines the strict, hash-sealed `WorkloadArtifact v1` and its restricted engine view;
-- `workload/synthetic` materializes initial state, ordered blocks, logical arrivals, stable operation IDs, and audit ground truth from a seed.
-
-The frozen execution contract is:
-
-- state keys are arbitrary bytes; runtime values are signed 64-bit integers encoded as exactly eight big-endian bytes;
-- a missing read yields integer zero with `Exists=false`; malformed stored values fail with `invalid_state`;
-- each instruction costs one unit and `compute(n)` costs `n+1`; checked arithmetic, gas exhaustion, and invalid programs have distinct stable statuses/codes;
-- compute work updates the result-visible `ComputeDigest`, which is covered by the canonical result digest and prevents dead-work elimination;
-- transactions read their own writes, and the last operation on a key wins within that transaction;
-- only `success` commits the transaction overlay; explicit failure, invalid program/state, arithmetic failure, and out-of-gas retain accounting/reads but publish no writes;
-- semantic transaction failure does not abort the block; infrastructure cancellation aborts the block and publishes none of that block's state;
-- state snapshots and write sets are byte-key sorted, while transaction/read/event order remains execution order; the canonical SHA-256 digest excludes its own `Digest` field.
-
-Every generated workload is sealed as `workload-artifact-v1`. Its canonical hash covers generator name/version/config/seed, initial state, ordered programs, logical arrival schedule, stable IDs, audit-only actual access/path metadata, and engine-visible metadata records. Candidate execution receives an `ExecutionInput`, which cannot represent ground truth and exposes metadata only when its declared source is explicitly allowed. Descriptor parsing rejects unknown fields, stale hashes, malformed metadata size/hash, and inconsistent logical IDs before execution.
-
-## Block-STM adapter and fixed policies
-
-Week 3 adds the unified execution seam without changing the frozen root-level scheduler:
-
-- `internal/engine` defines the common engine/run configuration and atomic state-publication contract;
-- `internal/control` registers all 19 first-version events, their unique typed dispatch keys, action schemas, trust classes, capabilities, and logical traces;
-- `internal/policy` groups macro, transaction, runtime, and recovery hooks behind one immutable policy identity;
-- `internal/policy/fixed` provides explicit `SerialPreset` and `BlockSTMPreset` decisions for every hook;
-- `internal/engine/blockstm` adapts the flat runtime and byte state to the original Block-STM MVCC/scheduler API, publishing only a completed canonical block snapshot.
-
-The adapter preserves missing versus existing empty values with a private value frame. Failed speculative executions never publish their overlay writes. Final transaction results remain in preset order, and validation-driven reexecution is represented by increasing incarnations plus paired `VALIDATION_FAIL`/`REPLAY_START` events. Kernel-internal callbacks that the frozen `TxExecutor` API cannot expose—such as the precise `READ_ESTIMATE`, conflict, worker-idle, and queue-pressure events—are declared unavailable with reasons instead of being fabricated.
-
-The differential suite compares the complete canonical `BlockResult` and final state, including ordered transaction status, errors, units, reads, writes, return values, runtime events, compute digest, and block digest. It covers rollback, delete, malformed state, out-of-gas, arithmetic overflow, branches, hot-key conflicts, multiple seeds, and executor counts.
-
-Run the macOS correctness gate from the repository root:
+The module declares Go 1.21 or later. Run the standard correctness gates from the repository root:
 
 ```sh
 go test -count=1 ./...
 go test -race -count=1 ./...
 go vet ./...
+./scripts/verify_upstream_baseline.sh
 ```
 
-Repeat the determinism-sensitive packages with:
+The baseline verifier checks the frozen upstream source, runs the full test and race suites, repeats determinism-sensitive execution, and executes a small Block-STM benchmark.
 
-```sh
-go test -count=20 ./internal/...
-```
+## Run experiments
 
-To inspect the Week 3 gates directly:
-
-```sh
-go test -count=1 -v ./internal/engine/blockstm
-go test -count=1 -v ./internal/control ./internal/policy ./internal/policy/fixed
-go test -race -count=1 ./internal/engine/blockstm ./internal/control ./internal/policy
-```
-
-`scripts/verify_upstream_baseline.sh` additionally proves that every original frozen root-level go-block-stm file remains unmodified and reruns the full baseline suite. Week 5 adds `speculation.go` beside those files because the admission scheduler must share package-private MVMemory/status machinery; the `L=W` default still calls the original `ExecuteBlock` path directly. Performance, scaling, affinity, and NUMA measurements are intentionally deferred to Linux; macOS results are correctness checks and pilot evidence only.
-
-## Benchmark runner and telemetry
-
-Week 4 adds a strict experiment-matrix runner under `cmd/bench`; Week 5 evolves the contract to `experiment-matrix-v2` with an explicit CQ2 `max_speculative_inflight` budget. Build the binary so Go embeds the Git revision and dirty-worktree bit, then run the smoke matrix:
+Build the benchmark runner and validate a smoke matrix before executing it:
 
 ```sh
 go build -trimpath -o /tmp/blockchain-execution-bench ./cmd/bench
-/tmp/blockchain-execution-bench validate -config configs/experiments/week4-smoke.json
-/tmp/blockchain-execution-bench run -config configs/experiments/week4-smoke.json
+/tmp/blockchain-execution-bench validate -config configs/experiments/baseline/smoke.json
+/tmp/blockchain-execution-bench run -config configs/experiments/baseline/smoke.json
 ```
 
-`validate` executes the serial oracle and every configured candidate on independent states, compares the complete canonical block results, and writes a validation bundle bound to the binary commit, config hash, statistical protocol, workload hash, and expected result digest. `run` refuses a stale bundle and executes only a validated candidate. Every warmup and measurement is launched in a fresh process, while workload loading/generation, state construction, canonical digesting, result comparison, JSON encoding, and trace output remain outside the timed interval.
-
-Each run emits `benchmark-run-v2` JSONL with hardware/runtime provenance, process ID, Linux allowed CPU/memory-node lists and governor, block latencies, goodput, useful/re-executed/discarded work, incarnation attempts, CQ2 limit/peak/stall counters, action/fallback counters, policy decision cost, memory high-water mark, capability availability, and explicit unavailable metrics. `action-trace-v2` records stable targets, trust class, feature source, observation version, policy-table version, action, and lookup/dispatch duration. Trace modes are `detailed`, `counters`, and `off`; formal timing uses `counters`, while `detailed` is a diagnostic/action-trace mode. Matched instrumented/off cases produce a `telemetry-ablation-v1` record without changing canonical results.
-
-The smoke outputs are generated under `results/` and are intentionally ignored by Git. They are not paper data. Formal runs require Linux, a clean VCS-stamped binary, the frozen minimum repetitions in `configs/statistical/protocol-v1.json`, and explicit affinity, NUMA, and page-cache controls. The formal template is deliberately rejected until its `REPLACE_WITH_...` fields are frozen for the target server.
-
-On an already provisioned Linux host, the complete correctness/build/runner smoke is:
+Convenience scripts cover the implemented comparison families:
 
 ```sh
-./scripts/run_week4_linux_smoke.sh
+./scripts/run_baseline_linux_smoke.sh
+./scripts/run_speculation_window_smoke.sh
+./scripts/run_dependency_guidance_smoke.sh
+./scripts/summarize_dependency_guidance.sh
 ```
 
-The script uses `GOPROXY=off` and never installs tools or dependencies; a missing Go toolchain, race prerequisite, or module cache is reported as an environment failure.
+Smoke runs are correctness checks and pilot evidence. Formal performance runs belong on a controlled Linux server with frozen CPU affinity, NUMA policy, page-cache policy, toolchain, and statistical protocol. The committed formal templates intentionally reject placeholder environment controls.
 
-## Week 5 CQ2 speculation limit
+Generated results, temporary files, local papers, research notes, and private development artifacts are excluded from Git. The public repository tracks the source, tests, scripts, and reproducible experiment contracts required to rebuild results.
 
-`max_speculative_inflight` limits the number of admitted top-level transactions beyond the continuous stable validated frontier. A transaction retains one slot while executing, suspended, validating, or reexecuting; a new incarnation does not take a second slot. Positive limits use the admission-aware scheduler, while zero means `W` and preserves the original full-window Block-STM path.
+## License
 
-The committed Mac smoke matrices keep `P=8`, CQ1 at one full consensus block, CQ3 at runtime MVCC, CQ4 at whole-transaction recovery, and CQ5 on the shared worker pool. They compare `L ∈ {1, P, 4P, W}` on expensive low-conflict, cheap hotspot-chain, and fixed-cost boundary workloads with `key_space ∈ {1,2,3}`. Every candidate is differentially validated against the serial oracle before measurement.
-
-```sh
-./scripts/run_week5_cq2_smoke.sh
-```
-
-`benchmark-run-v2` reports the configured/effective limit, exact peak admitted occupancy and summed admission-stall worker time for finite limits, plus the existing incarnation/reexecution/discarded-work breakdown. Exact occupancy is deliberately unavailable on the untouched `L=W` path rather than inferred. The Linux formal template remains rejected until its affinity, NUMA, and page-cache placeholders are frozen on the target host.
+The imported Block-STM substrate and this repository are distributed under the Apache License 2.0. See [LICENSE](LICENSE).

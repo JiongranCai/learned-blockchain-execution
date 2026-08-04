@@ -133,6 +133,28 @@ func TestMaxSpeculativeInflightRejectsInvalidLimit(t *testing.T) {
 	}
 }
 
+func TestStaticEstimateMissesAndFalsePositivesRemainSafe(t *testing.T) {
+	stores := map[storetypes.StoreKey]int{StoreKeyAuth: 0, StoreKeyBank: 1}
+	block := testBlock(64, 4)
+	// The estimates are deliberately incomplete and include a false-positive
+	// location. They are acceleration hints, not a correctness dependency.
+	estimates := make([]MultiLocations, block.Size())
+	estimates[0] = MultiLocations{0: Locations{Key("not-accessed")}}
+
+	sequential := NewMultiMemDB(stores)
+	runSequential(sequential, block)
+	for _, limit := range []int{0, 3} {
+		storage := NewMultiMemDB(stores)
+		_, err := ExecuteBlockWithMaxSpeculativeInflightAndEstimates(
+			context.Background(), block.Size(), stores, storage, 8, limit, estimates, block.ExecuteTx,
+		)
+		require.NoError(t, err)
+		for store := range stores {
+			require.True(t, StoreEqual(sequential.GetKVStore(store), storage.GetKVStore(store)))
+		}
+	}
+}
+
 func waitClosed(t *testing.T, signal <-chan struct{}) {
 	t.Helper()
 	select {

@@ -47,7 +47,7 @@ type Policy interface {
 	RecoveryPolicy
 }
 
-// RuntimeDefaults provides the only flat-runtime actions available in Week 3.
+// RuntimeDefaults provides the baseline flat-runtime actions.
 // Engines use a full fixed Policy; direct runtime callers can use this value.
 type RuntimeDefaults struct{}
 

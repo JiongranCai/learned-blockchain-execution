@@ -17,6 +17,7 @@ var (
 	ErrMissingBlockID          = errors.New("block id is required")
 	ErrInvalidWorkers          = errors.New("invalid executor count")
 	ErrInvalidSpeculationLimit = errors.New("invalid max speculative inflight")
+	ErrInvalidDependencyMode   = errors.New("invalid dependency control")
 	ErrUnsupported             = errors.New("policy decision is unsupported by engine")
 )
 
@@ -28,7 +29,36 @@ type RunConfig struct {
 	// MaxSpeculativeInflight bounds admitted transactions beyond the stable
 	// validated frontier. Zero means the full block window (W).
 	MaxSpeculativeInflight int
-	OmitResultDigest       bool
+	// DependencyMode and DependencyInformation independently record the
+	// representation/use and acquisition choices. Their zero values preserve
+	// the runtime-MVCC baseline for direct engine callers.
+	DependencyMode        control.DependencyMode
+	DependencyInformation control.DependencyInformation
+	OmitResultDigest      bool
+}
+
+func EffectiveDependencyControl(config RunConfig) (control.DependencyMode, control.DependencyInformation, error) {
+	mode := config.DependencyMode
+	if mode == "" {
+		mode = control.DependencyMVCCRuntime
+	}
+	if !control.ValidDependencyMode(mode) {
+		return "", "", fmt.Errorf("%w: unknown mode %q", ErrInvalidDependencyMode, mode)
+	}
+	information := config.DependencyInformation
+	if information == "" {
+		if mode != control.DependencyMVCCRuntime {
+			return "", "", fmt.Errorf("%w: mode %q requires explicit information source", ErrInvalidDependencyMode, mode)
+		}
+		information = control.DependencyInformationRuntime
+	}
+	if !control.ValidDependencyInformation(information) {
+		return "", "", fmt.Errorf("%w: unknown information source %q", ErrInvalidDependencyMode, information)
+	}
+	if mode != control.DependencyMVCCRuntime && information != control.DependencyInformationStaticProgram {
+		return "", "", fmt.Errorf("%w: mode %q requires %q information", ErrInvalidDependencyMode, mode, control.DependencyInformationStaticProgram)
+	}
+	return mode, information, nil
 }
 
 func EffectiveTraceMode(config RunConfig) (control.TraceMode, error) {

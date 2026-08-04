@@ -24,7 +24,11 @@ var (
 	ErrInvalidTransactions      = errors.New("transactions_per_block must be positive")
 	ErrInvalidTransactionBudget = errors.New("transaction_max_units is too small")
 	ErrInvalidFailureInterval   = errors.New("failure_every must be non-negative")
+	ErrInvalidProgramShape      = errors.New("unsupported synthetic program_shape")
+	ErrBranchKeySpace           = errors.New("state_dependent_branch requires initial_keys greater than key_space")
 )
+
+const ProgramShapeStateDependentBranch = "state_dependent_branch"
 
 type Config struct {
 	Seed                 int64  `json:"seed"`
@@ -35,6 +39,7 @@ type Config struct {
 	MaxComputeUnits      uint64 `json:"max_compute_units"`
 	TransactionMaxUnits  uint64 `json:"transaction_max_units"`
 	FailureEvery         int    `json:"failure_every"`
+	ProgramShape         string `json:"program_shape,omitempty"`
 }
 
 func Generate(config Config) (workload.Artifact, error) {
@@ -62,10 +67,12 @@ func Generate(config Config) (workload.Artifact, error) {
 		EngineVisibleMetadata:  make([]workload.MetadataRecord, 0),
 	}
 
+	initialValues := make([]int64, config.InitialKeys)
 	for i := 0; i < config.InitialKeys; i++ {
+		initialValues[i] = int64(rng.Intn(10_000))
 		artifact.InitialState = append(artifact.InitialState, model.StateEntry{
 			Key:   stateKey(i),
-			Value: flat.EncodeInt64(int64(rng.Intn(10_000))),
+			Value: flat.EncodeInt64(initialValues[i]),
 		})
 	}
 
@@ -86,19 +93,21 @@ func Generate(config Config) (workload.Artifact, error) {
 				computeUnits = uint64(rng.Int63n(int64(config.MaxComputeUnits + 1)))
 			}
 
-			instructions := []model.Instruction{
-				{Op: model.OpRead, Key: readKey, Register: "value"},
-				{Op: model.OpCompute, ComputeUnits: computeUnits},
-				{
-					Op:  model.OpWrite,
-					Key: writeKey,
-					Expression: model.Expression{
-						Base:  model.Register("value"),
-						Delta: delta,
-					},
-				},
-			}
 			willFail := config.FailureEvery > 0 && (globalTransaction+1)%config.FailureEvery == 0
+			instructions, branchTruth := flatProgram(readKey, writeKey, delta, computeUnits)
+			if config.ProgramShape == ProgramShapeStateDependentBranch {
+				alternateReadKey := stateKey(rng.Intn(config.KeySpace))
+				selectorIndex := config.KeySpace + rng.Intn(config.InitialKeys-config.KeySpace)
+				instructions, branchTruth = stateDependentBranchProgram(
+					stateKey(selectorIndex),
+					initialValues[selectorIndex] < 5_000,
+					readKey,
+					alternateReadKey,
+					writeKey,
+					delta,
+					computeUnits,
+				)
+			}
 			if willFail {
 				instructions = append(instructions, model.Instruction{
 					Op:        model.OpFailIf,
@@ -122,25 +131,23 @@ func Generate(config Config) (workload.Artifact, error) {
 				Program:  model.Program{Instructions: instructions},
 			})
 
-			actualOperationCount := len(instructions)
 			expectedStatus := model.TxStatusSuccess
 			if willFail {
-				actualOperationCount-- // RETURN is structurally present but unreachable.
 				expectedStatus = model.TxStatusFailed
 			}
-			operationPath := make([]string, 0, actualOperationCount)
-			for _, instruction := range instructions[:actualOperationCount] {
-				operationPath = append(operationPath, instruction.ID)
+			actualIndices := branchTruth.actualInstructionIndices(willFail, len(instructions))
+			operationPath := make([]string, 0, len(actualIndices))
+			for _, instructionIndex := range actualIndices {
+				operationPath = append(operationPath, instructions[instructionIndex].ID)
 			}
+			accesses := branchTruth.accesses(instructions)
+			branches := branchTruth.branches(instructions)
 			artifact.GroundTruth = append(artifact.GroundTruth, workload.TransactionGroundTruth{
 				TransactionID:  transactionID,
 				ExpectedStatus: expectedStatus,
 				OperationPath:  operationPath,
-				Accesses: []workload.GroundTruthAccess{
-					{OperationID: instructions[0].ID, Mode: workload.AccessRead, Key: cloneBytes(readKey)},
-					{OperationID: instructions[2].ID, Mode: workload.AccessWrite, Key: cloneBytes(writeKey)},
-				},
-				Branches: make([]workload.BranchOutcome, 0),
+				Accesses:       accesses,
+				Branches:       branches,
 			})
 			artifact.LogicalArrivalSchedule = append(artifact.LogicalArrivalSchedule, workload.LogicalArrival{
 				Sequence:      uint64(globalTransaction),
@@ -175,16 +182,172 @@ func validateConfig(config Config) error {
 	if config.FailureEvery < 0 {
 		return ErrInvalidFailureInterval
 	}
+	if config.ProgramShape != "" && config.ProgramShape != ProgramShapeStateDependentBranch {
+		return ErrInvalidProgramShape
+	}
+	if config.ProgramShape == ProgramShapeStateDependentBranch && config.InitialKeys <= config.KeySpace {
+		return ErrBranchKeySpace
+	}
 	// Int63n needs MaxComputeUnits+1 to remain a positive int64. This also
 	// leaves ample room for the fixed per-transaction instruction costs.
 	if config.MaxComputeUnits >= uint64(math.MaxInt64) {
 		return ErrInvalidTransactionBudget
 	}
 	minimumUnits := config.MaxComputeUnits + 4
+	if config.ProgramShape == ProgramShapeStateDependentBranch {
+		minimumUnits = config.MaxComputeUnits + 7
+	}
 	if config.TransactionMaxUnits < minimumUnits {
 		return ErrInvalidTransactionBudget
 	}
 	return nil
+}
+
+type programTruth struct {
+	branching         bool
+	branchTaken       bool
+	selectorRead      int
+	untakenRead       int
+	takenRead         int
+	write             int
+	conditionalJump   int
+	unconditionalJump int
+}
+
+func flatProgram(readKey, writeKey []byte, delta int64, computeUnits uint64) ([]model.Instruction, programTruth) {
+	return []model.Instruction{
+		{Op: model.OpRead, Key: readKey, Register: "value"},
+		{Op: model.OpCompute, ComputeUnits: computeUnits},
+		{
+			Op:  model.OpWrite,
+			Key: writeKey,
+			Expression: model.Expression{
+				Base:  model.Register("value"),
+				Delta: delta,
+			},
+		},
+	}, programTruth{selectorRead: 0, write: 2}
+}
+
+func stateDependentBranchProgram(
+	selectorKey []byte,
+	branchTaken bool,
+	untakenReadKey []byte,
+	takenReadKey []byte,
+	writeKey []byte,
+	delta int64,
+	computeUnits uint64,
+) ([]model.Instruction, programTruth) {
+	return []model.Instruction{
+			{Op: model.OpRead, Key: selectorKey, Register: "selector"},
+			{
+				Op: model.OpJumpIf,
+				Condition: model.Condition{
+					Kind:  model.ConditionLess,
+					Left:  model.Register("selector"),
+					Right: model.Literal(5_000),
+				},
+				Target: 4,
+			},
+			{Op: model.OpRead, Key: untakenReadKey, Register: "value"},
+			{Op: model.OpJumpIf, Condition: model.Condition{Kind: model.ConditionAlways}, Target: 5},
+			{Op: model.OpRead, Key: takenReadKey, Register: "value"},
+			{Op: model.OpCompute, ComputeUnits: computeUnits},
+			{
+				Op:  model.OpWrite,
+				Key: writeKey,
+				Expression: model.Expression{
+					Base:  model.Register("value"),
+					Delta: delta,
+				},
+			},
+		}, programTruth{
+			branching:         true,
+			branchTaken:       branchTaken,
+			selectorRead:      0,
+			untakenRead:       2,
+			takenRead:         4,
+			write:             6,
+			conditionalJump:   1,
+			unconditionalJump: 3,
+		}
+}
+
+func (truth programTruth) actualInstructionIndices(willFail bool, instructionCount int) []int {
+	if !truth.branching {
+		count := instructionCount
+		if willFail {
+			count-- // RETURN is structurally present but unreachable.
+		}
+		indices := make([]int, count)
+		for index := range indices {
+			indices[index] = index
+		}
+		return indices
+	}
+
+	indices := []int{truth.selectorRead, truth.conditionalJump}
+	if truth.branchTaken {
+		indices = append(indices, truth.takenRead)
+	} else {
+		indices = append(indices, truth.untakenRead, truth.unconditionalJump)
+	}
+	indices = append(indices, 5, truth.write)
+	if willFail {
+		indices = append(indices, instructionCount-2)
+	} else {
+		indices = append(indices, instructionCount-1)
+	}
+	return indices
+}
+
+func (truth programTruth) accesses(instructions []model.Instruction) []workload.GroundTruthAccess {
+	readIndex := truth.selectorRead
+	accesses := make([]workload.GroundTruthAccess, 0, 3)
+	if truth.branching {
+		accesses = append(accesses, workload.GroundTruthAccess{
+			OperationID: instructions[truth.selectorRead].ID,
+			Mode:        workload.AccessRead,
+			Key:         cloneBytes(instructions[truth.selectorRead].Key),
+		})
+		if truth.branchTaken {
+			readIndex = truth.takenRead
+		} else {
+			readIndex = truth.untakenRead
+		}
+	}
+	accesses = append(accesses,
+		workload.GroundTruthAccess{
+			OperationID: instructions[readIndex].ID,
+			Mode:        workload.AccessRead,
+			Key:         cloneBytes(instructions[readIndex].Key),
+		},
+		workload.GroundTruthAccess{
+			OperationID: instructions[truth.write].ID,
+			Mode:        workload.AccessWrite,
+			Key:         cloneBytes(instructions[truth.write].Key),
+		},
+	)
+	return accesses
+}
+
+func (truth programTruth) branches(instructions []model.Instruction) []workload.BranchOutcome {
+	if !truth.branching {
+		return make([]workload.BranchOutcome, 0)
+	}
+	branches := []workload.BranchOutcome{{
+		BranchID: instructions[truth.conditionalJump].ID,
+		Taken:    truth.branchTaken,
+		Target:   instructions[truth.conditionalJump].Target,
+	}}
+	if !truth.branchTaken {
+		branches = append(branches, workload.BranchOutcome{
+			BranchID: instructions[truth.unconditionalJump].ID,
+			Taken:    true,
+			Target:   instructions[truth.unconditionalJump].Target,
+		})
+	}
+	return branches
 }
 
 func stateKey(index int) []byte {

@@ -18,7 +18,7 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/workload/synthetic"
 )
 
-const ConfigSchemaVersion = "experiment-matrix-v2"
+const ConfigSchemaVersion = "experiment-matrix-v3"
 
 var ErrInvalidConfig = errors.New("invalid experiment config")
 
@@ -44,12 +44,14 @@ type WorkloadConfig struct {
 }
 
 type CaseConfig struct {
-	ID                     string            `json:"id"`
-	Engine                 string            `json:"engine"`
-	Policy                 string            `json:"policy"`
-	Executors              int               `json:"executors"`
-	MaxSpeculativeInflight int               `json:"max_speculative_inflight"`
-	TraceMode              control.TraceMode `json:"trace_mode"`
+	ID                     string                        `json:"id"`
+	Engine                 string                        `json:"engine"`
+	Policy                 string                        `json:"policy"`
+	Executors              int                           `json:"executors"`
+	MaxSpeculativeInflight int                           `json:"max_speculative_inflight"`
+	DependencyMode         control.DependencyMode        `json:"dependency_mode"`
+	DependencyInformation  control.DependencyInformation `json:"dependency_information"`
+	TraceMode              control.TraceMode             `json:"trace_mode"`
 }
 
 func (c CaseConfig) TelemetryCase() telemetry.Case {
@@ -60,6 +62,8 @@ func (c CaseConfig) TelemetryCase() telemetry.Case {
 		PolicyVersion:          fixed.PresetVersion,
 		Executors:              c.Executors,
 		MaxSpeculativeInflight: c.MaxSpeculativeInflight,
+		DependencyMode:         c.DependencyMode,
+		DependencyInformation:  c.DependencyInformation,
 		TraceMode:              c.TraceMode,
 	}
 }
@@ -179,6 +183,16 @@ func (c Config) validate() (time.Duration, error) {
 		if experimentCase.MaxSpeculativeInflight < 0 {
 			return invalid("case %q has a negative max_speculative_inflight", experimentCase.ID)
 		}
+		if !control.ValidDependencyMode(experimentCase.DependencyMode) {
+			return invalid("case %q has invalid dependency_mode %q", experimentCase.ID, experimentCase.DependencyMode)
+		}
+		if !control.ValidDependencyInformation(experimentCase.DependencyInformation) {
+			return invalid("case %q has invalid dependency_information %q", experimentCase.ID, experimentCase.DependencyInformation)
+		}
+		if experimentCase.DependencyMode != control.DependencyMVCCRuntime &&
+			experimentCase.DependencyInformation != control.DependencyInformationStaticProgram {
+			return invalid("case %q mode %q requires static_program information", experimentCase.ID, experimentCase.DependencyMode)
+		}
 		if !control.ValidTraceMode(experimentCase.TraceMode) {
 			return invalid("case %q has invalid trace_mode %q", experimentCase.ID, experimentCase.TraceMode)
 		}
@@ -190,6 +204,11 @@ func (c Config) validate() (time.Duration, error) {
 		}
 		if experimentCase.Engine == "serial" && experimentCase.MaxSpeculativeInflight > 1 {
 			return invalid("serial case %q must use max_speculative_inflight 0 or 1", experimentCase.ID)
+		}
+		if experimentCase.Engine == "serial" &&
+			(experimentCase.DependencyMode != control.DependencyMVCCRuntime ||
+				experimentCase.DependencyInformation != control.DependencyInformationRuntime) {
+			return invalid("serial case %q must use mvcc_runtime/runtime_observed dependency control", experimentCase.ID)
 		}
 		caseIDs[experimentCase.ID] = experimentCase
 	}
@@ -214,7 +233,8 @@ func (c Config) validate() (time.Duration, error) {
 			return invalid("telemetry ablation requires off and instrumented trace modes")
 		}
 		if off.Engine != instrumented.Engine || off.Policy != instrumented.Policy || off.Executors != instrumented.Executors ||
-			off.MaxSpeculativeInflight != instrumented.MaxSpeculativeInflight {
+			off.MaxSpeculativeInflight != instrumented.MaxSpeculativeInflight ||
+			off.DependencyMode != instrumented.DependencyMode || off.DependencyInformation != instrumented.DependencyInformation {
 			return invalid("telemetry ablation cases may differ only by trace mode and id")
 		}
 		for _, platform := range c.TelemetryAblation.EnforcePlatforms {

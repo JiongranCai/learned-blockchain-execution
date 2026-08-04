@@ -96,7 +96,7 @@ func (r *Runtime) Execute(
 }
 
 // ExecuteWithHooks runs the same deterministic semantics through the shared
-// typed runtime-policy seam. Hooks may observe/select the sole Week 3 baseline
+// typed runtime-policy seam. Hooks may observe/select the current baseline
 // access/branch actions but cannot directly mutate state.
 func (r *Runtime) ExecuteWithHooks(
 	ctx context.Context,

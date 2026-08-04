@@ -8,7 +8,7 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/experiment"
 )
 
-func TestWeek5CQ2MatricesFreezeDistinctLimitsAndWorkloads(t *testing.T) {
+func TestSpeculationMatricesFreezeDistinctLimitsAndWorkloads(t *testing.T) {
 	paths := []string{
 		"expensive-low-conflict-smoke.json",
 		"cheap-hotspot-smoke.json",
@@ -18,7 +18,7 @@ func TestWeek5CQ2MatricesFreezeDistinctLimitsAndWorkloads(t *testing.T) {
 	}
 	for _, name := range paths {
 		t.Run(name, func(t *testing.T) {
-			path := filepath.Join("..", "..", "configs", "experiments", "week5-cq2", name)
+			path := filepath.Join("..", "..", "configs", "experiments", "speculation-window", name)
 			loaded, err := experiment.LoadConfig(path)
 			if err != nil {
 				t.Fatal(err)
@@ -28,7 +28,7 @@ func TestWeek5CQ2MatricesFreezeDistinctLimitsAndWorkloads(t *testing.T) {
 				t.Fatal(err)
 			}
 			if len(artifact.OrderedBlocks) == 0 {
-				t.Fatal("CQ2 workload contains no blocks")
+				t.Fatal("speculation workload contains no blocks")
 			}
 			window := len(artifact.OrderedBlocks[0].Transactions)
 			seen := make(map[int]string)
@@ -46,7 +46,7 @@ func TestWeek5CQ2MatricesFreezeDistinctLimitsAndWorkloads(t *testing.T) {
 					effective = window
 				}
 				if previous, exists := seen[effective]; exists {
-					t.Fatalf("CQ2 limits collapse after min(L,W): %s and %s both use %d", previous, experimentCase.ID, effective)
+					t.Fatalf("speculation limits collapse after min(L,W): %s and %s both use %d", previous, experimentCase.ID, effective)
 				}
 				seen[effective] = experimentCase.ID
 			}
@@ -57,8 +57,8 @@ func TestWeek5CQ2MatricesFreezeDistinctLimitsAndWorkloads(t *testing.T) {
 	}
 }
 
-func TestWeek5CQ2FormalTemplateRequiresFrozenLinuxControls(t *testing.T) {
-	path := filepath.Join("..", "..", "configs", "experiments", "week5-cq2", "linux-formal-template.json")
+func TestSpeculationFormalTemplateRequiresFrozenLinuxControls(t *testing.T) {
+	path := filepath.Join("..", "..", "configs", "experiments", "speculation-window", "linux-formal-template.json")
 	if _, err := experiment.LoadConfig(path); !errors.Is(err, experiment.ErrInvalidConfig) {
 		t.Fatalf("unfrozen Linux template was accepted: %v", err)
 	}

@@ -90,6 +90,8 @@ func Execute(ctx context.Context, artifact workload.Artifact, experimentCase Cas
 			Policy:                 selectedPolicy,
 			TraceMode:              experimentCase.TraceMode,
 			MaxSpeculativeInflight: experimentCase.MaxSpeculativeInflight,
+			DependencyMode:         experimentCase.DependencyMode,
+			DependencyInformation:  experimentCase.DependencyInformation,
 			OmitResultDigest:       omitDigest,
 		})
 		elapsed := uint64(time.Since(started))

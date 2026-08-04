@@ -65,6 +65,13 @@ func (e *Engine) ExecuteBlock(
 	if config.MaxSpeculativeInflight < 0 || config.MaxSpeculativeInflight > 1 {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, engineapi.ErrInvalidSpeculationLimit
 	}
+	dependencyMode, dependencyInformation, err := engineapi.EffectiveDependencyControl(config)
+	if err != nil {
+		return model.BlockResult{}, control.Trace{Engine: engineName}, err
+	}
+	if dependencyMode != control.DependencyMVCCRuntime || dependencyInformation != control.DependencyInformationRuntime {
+		return model.BlockResult{}, control.Trace{Engine: engineName}, engineapi.ErrInvalidDependencyMode
+	}
 	if err := ctx.Err(); err != nil {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, err
 	}
@@ -173,6 +180,12 @@ func (e *Engine) ExecuteBlock(
 		}
 		for _, transaction := range result.Transactions {
 			finalTrace.Work.UsefulExecutionUnits += transaction.UnitsUsed
+		}
+		finalTrace.Work.Dependency = control.DependencyCounters{
+			Mode:                control.DependencyMVCCRuntime,
+			Information:         control.DependencyInformationRuntime,
+			InformationComplete: true,
+			InformationExact:    true,
 		}
 	}
 	return result, finalTrace, nil

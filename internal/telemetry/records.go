@@ -10,20 +10,22 @@ import (
 )
 
 const (
-	BenchmarkRecordSchema  = "benchmark-run-v2"
-	ValidationRecordSchema = "validation-run-v2"
-	ActionTraceSchema      = "action-trace-v2"
+	BenchmarkRecordSchema  = "benchmark-run-v3"
+	ValidationRecordSchema = "validation-run-v3"
+	ActionTraceSchema      = "action-trace-v3"
 	AblationRecordSchema   = "telemetry-ablation-v1"
 )
 
 type Case struct {
-	ID                     string            `json:"id"`
-	Engine                 string            `json:"engine"`
-	Policy                 string            `json:"policy"`
-	PolicyVersion          string            `json:"policy_version"`
-	Executors              int               `json:"executors"`
-	MaxSpeculativeInflight int               `json:"max_speculative_inflight"`
-	TraceMode              control.TraceMode `json:"trace_mode"`
+	ID                     string                        `json:"id"`
+	Engine                 string                        `json:"engine"`
+	Policy                 string                        `json:"policy"`
+	PolicyVersion          string                        `json:"policy_version"`
+	Executors              int                           `json:"executors"`
+	MaxSpeculativeInflight int                           `json:"max_speculative_inflight"`
+	DependencyMode         control.DependencyMode        `json:"dependency_mode"`
+	DependencyInformation  control.DependencyInformation `json:"dependency_information"`
+	TraceMode              control.TraceMode             `json:"trace_mode"`
 }
 
 type Environment struct {
@@ -84,34 +86,35 @@ type Timing struct {
 }
 
 type Metrics struct {
-	Blocks                        uint64                  `json:"blocks"`
-	Transactions                  uint64                  `json:"transactions"`
-	SuccessfulTransactions        uint64                  `json:"successful_transactions"`
-	FailedTransactions            uint64                  `json:"failed_transactions"`
-	UsefulExecutionUnits          uint64                  `json:"useful_execution_units"`
-	ReexecutedExecutionUnits      uint64                  `json:"reexecuted_execution_units"`
-	DiscardedExecutionUnits       uint64                  `json:"discarded_execution_units"`
-	ExecutionAttempts             uint64                  `json:"execution_attempts"`
-	ReexecutionAttempts           uint64                  `json:"reexecution_attempts"`
-	CompletedTransactionsPerS     float64                 `json:"completed_transactions_per_second"`
-	CommittedGoodputPerS          float64                 `json:"committed_goodput_per_second"`
-	ValidationEvents              uint64                  `json:"validation_events"`
-	ValidationFailures            uint64                  `json:"validation_failures"`
-	ReexecutionEvents             uint64                  `json:"reexecution_events"`
-	WaitEvents                    uint64                  `json:"wait_events"`
-	WorkerIdleEvents              uint64                  `json:"worker_idle_events"`
-	QueuePressureEvents           uint64                  `json:"queue_pressure_events"`
-	PolicyDecisionNS              uint64                  `json:"policy_decision_ns"`
-	MaxRSSBytes                   uint64                  `json:"max_rss_bytes"`
-	ActionCounters                []control.ActionCounter `json:"action_counters,omitempty"`
-	FallbackCounters              []control.ActionCounter `json:"fallback_counters,omitempty"`
-	EffectiveSpeculationLimit     uint64                  `json:"effective_speculation_limit"`
-	SpeculationLimitApplied       bool                    `json:"speculation_limit_applied"`
-	SpeculationTelemetryAvailable bool                    `json:"speculation_telemetry_available"`
-	PeakSpeculativeInflight       uint64                  `json:"peak_speculative_inflight"`
-	AdmissionStallEvents          uint64                  `json:"admission_stall_events"`
-	AdmissionStallNS              uint64                  `json:"admission_stall_ns"`
-	Unavailable                   []string                `json:"unavailable"`
+	Blocks                        uint64                     `json:"blocks"`
+	Transactions                  uint64                     `json:"transactions"`
+	SuccessfulTransactions        uint64                     `json:"successful_transactions"`
+	FailedTransactions            uint64                     `json:"failed_transactions"`
+	UsefulExecutionUnits          uint64                     `json:"useful_execution_units"`
+	ReexecutedExecutionUnits      uint64                     `json:"reexecuted_execution_units"`
+	DiscardedExecutionUnits       uint64                     `json:"discarded_execution_units"`
+	ExecutionAttempts             uint64                     `json:"execution_attempts"`
+	ReexecutionAttempts           uint64                     `json:"reexecution_attempts"`
+	CompletedTransactionsPerS     float64                    `json:"completed_transactions_per_second"`
+	CommittedGoodputPerS          float64                    `json:"committed_goodput_per_second"`
+	ValidationEvents              uint64                     `json:"validation_events"`
+	ValidationFailures            uint64                     `json:"validation_failures"`
+	ReexecutionEvents             uint64                     `json:"reexecution_events"`
+	WaitEvents                    uint64                     `json:"wait_events"`
+	WorkerIdleEvents              uint64                     `json:"worker_idle_events"`
+	QueuePressureEvents           uint64                     `json:"queue_pressure_events"`
+	PolicyDecisionNS              uint64                     `json:"policy_decision_ns"`
+	MaxRSSBytes                   uint64                     `json:"max_rss_bytes"`
+	ActionCounters                []control.ActionCounter    `json:"action_counters,omitempty"`
+	FallbackCounters              []control.ActionCounter    `json:"fallback_counters,omitempty"`
+	EffectiveSpeculationLimit     uint64                     `json:"effective_speculation_limit"`
+	SpeculationLimitApplied       bool                       `json:"speculation_limit_applied"`
+	SpeculationTelemetryAvailable bool                       `json:"speculation_telemetry_available"`
+	PeakSpeculativeInflight       uint64                     `json:"peak_speculative_inflight"`
+	AdmissionStallEvents          uint64                     `json:"admission_stall_events"`
+	AdmissionStallNS              uint64                     `json:"admission_stall_ns"`
+	Dependency                    control.DependencyCounters `json:"dependency"`
+	Unavailable                   []string                   `json:"unavailable"`
 }
 
 type BenchmarkRecord struct {
@@ -172,9 +175,8 @@ func CollectMetrics(results []model.BlockResult, traces []control.Trace, executi
 		MaxRSSBytes: maxRSS,
 		Unavailable: []string{
 			"transaction_latency: engine does not expose per-transaction timestamps",
-			"wait_time: frozen Block-STM callback is unavailable",
+			"mvcc_wait_time: frozen Block-STM callback is unavailable",
 			"worker_idle_time: frozen scheduler callback is unavailable",
-			"graph_construction: dependency modes are not implemented in M1",
 			"checkpoint_replay: nested recovery is not implemented in M1",
 		},
 	}
@@ -199,6 +201,7 @@ func CollectMetrics(results []model.BlockResult, traces []control.Trace, executi
 	detailedTraceSeen := false
 	workTelemetrySeen := false
 	speculationTelemetrySeen := false
+	dependencyTelemetrySeen := false
 	for _, trace := range traces {
 		if trace.Mode == control.TraceDetailed {
 			detailedTraceSeen = true
@@ -223,6 +226,8 @@ func CollectMetrics(results []model.BlockResult, traces []control.Trace, executi
 			metrics.ReexecutionAttempts += trace.Work.ReexecutionAttempts
 			metrics.ReexecutedExecutionUnits += trace.Work.ReexecutedExecutionUnits
 			metrics.DiscardedExecutionUnits += trace.Work.DiscardedExecutionUnits
+			mergeDependencyCounters(&metrics.Dependency, trace.Work.Dependency, dependencyTelemetrySeen)
+			dependencyTelemetrySeen = true
 		}
 		for _, counter := range trace.ActionCounters {
 			addCounter(actions, counter)
@@ -256,7 +261,47 @@ func CollectMetrics(results []model.BlockResult, traces []control.Trace, executi
 	if workTelemetrySeen && !speculationTelemetrySeen {
 		metrics.Unavailable = append(metrics.Unavailable, "peak_speculative_inflight: original full-window path does not expose exact admission occupancy")
 	}
+	if dependencyTelemetrySeen && metrics.Dependency.Information == control.DependencyInformationRuntime && !metrics.Dependency.AcquisitionMeasured {
+		metrics.Unavailable = append(metrics.Unavailable, "runtime_dependency_acquisition: frozen MVCC callbacks do not expose separate acquisition cost")
+	}
 	return metrics
+}
+
+func mergeDependencyCounters(target *control.DependencyCounters, source control.DependencyCounters, seen bool) {
+	if !seen {
+		target.Mode = source.Mode
+		target.Information = source.Information
+		target.InformationComplete = source.InformationComplete
+		target.InformationExact = source.InformationExact
+		target.AcquisitionMeasured = source.AcquisitionMeasured
+		target.RepresentationMeasured = source.RepresentationMeasured
+		target.ResolutionMeasured = source.ResolutionMeasured
+	} else {
+		target.InformationComplete = target.InformationComplete && source.InformationComplete
+		target.InformationExact = target.InformationExact && source.InformationExact
+		target.AcquisitionMeasured = target.AcquisitionMeasured && source.AcquisitionMeasured
+		target.RepresentationMeasured = target.RepresentationMeasured && source.RepresentationMeasured
+		target.ResolutionMeasured = target.ResolutionMeasured && source.ResolutionMeasured
+	}
+	target.AcquisitionNS += source.AcquisitionNS
+	target.AcquisitionUnits += source.AcquisitionUnits
+	target.AcquisitionBytes += source.AcquisitionBytes
+	target.StaticReadKeys += source.StaticReadKeys
+	target.StaticWriteKeys += source.StaticWriteKeys
+	target.RepresentationNS += source.RepresentationNS
+	target.RepresentationLogicalBytes += source.RepresentationLogicalBytes
+	target.DependencyEdges += source.DependencyEdges
+	target.SummaryEntries += source.SummaryEntries
+	target.EstimatedWriteLocations += source.EstimatedWriteLocations
+	target.EstimatedWriteKeyBytes += source.EstimatedWriteKeyBytes
+	target.ResolutionNS += source.ResolutionNS
+	target.PlanLookups += source.PlanLookups
+	target.TraversalSteps += source.TraversalSteps
+	target.WaitedExecutionAttempts += source.WaitedExecutionAttempts
+	target.WaitEvents += source.WaitEvents
+	target.WaitNS += source.WaitNS
+	target.PostGuidanceReexecutions += source.PostGuidanceReexecutions
+	target.PostGuidanceReexecutionUnits += source.PostGuidanceReexecutionUnits
 }
 
 func NewAblationRecord(offCase, instrumentedCase string, off, instrumented []uint64, budget float64, enforced bool) (AblationRecord, error) {

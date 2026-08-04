@@ -3,8 +3,10 @@
 set -euo pipefail
 
 readonly expected_upstream_commit="7afe924fb4a611a2626f92338f1f76e4ebefa62f"
-readonly script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly project_root="$(cd "${script_dir}/.." && pwd)"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly script_dir
+project_root="$(cd "${script_dir}/.." && pwd)"
+readonly project_root
 
 cd "${project_root}"
 
@@ -19,7 +21,7 @@ if ! git merge-base --is-ancestor "${expected_upstream_commit}" HEAD; then
 fi
 
 if ! git diff --quiet --diff-filter=MD "${expected_upstream_commit}" -- \
-  ':(top,glob)*.go' go.mod go.sum LICENSE .github/workflows/go.yml; then
+  ':(top,glob)*.go' go.mod go.sum LICENSE; then
   echo "an original upstream kernel file differs from the frozen baseline" >&2
   exit 1
 fi

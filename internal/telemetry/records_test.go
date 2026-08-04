@@ -31,6 +31,29 @@ func TestCollectMetricsUsesCanonicalResultsAndTraceCounters(t *testing.T) {
 			PeakSpeculativeInflight:       2,
 			AdmissionStallEvents:          3,
 			AdmissionStallNS:              17,
+			Dependency: control.DependencyCounters{
+				Mode:                         control.DependencySummary,
+				Information:                  control.DependencyInformationStaticProgram,
+				InformationComplete:          true,
+				InformationExact:             false,
+				AcquisitionMeasured:          true,
+				AcquisitionNS:                5,
+				RepresentationMeasured:       true,
+				RepresentationNS:             7,
+				RepresentationLogicalBytes:   16,
+				SummaryEntries:               2,
+				EstimatedWriteLocations:      2,
+				EstimatedWriteKeyBytes:       4,
+				ResolutionMeasured:           true,
+				ResolutionNS:                 11,
+				PlanLookups:                  2,
+				TraversalSteps:               3,
+				WaitedExecutionAttempts:      1,
+				WaitEvents:                   1,
+				WaitNS:                       9,
+				PostGuidanceReexecutions:     1,
+				PostGuidanceReexecutionUnits: 4,
+			},
 		},
 		ActionCounters: []control.ActionCounter{
 			{Event: control.EventTxEnd, Action: "mandatory_final", Count: 2},
@@ -54,6 +77,13 @@ func TestCollectMetricsUsesCanonicalResultsAndTraceCounters(t *testing.T) {
 	if metrics.EffectiveSpeculationLimit != 2 || !metrics.SpeculationLimitApplied || !metrics.SpeculationTelemetryAvailable ||
 		metrics.PeakSpeculativeInflight != 2 || metrics.AdmissionStallEvents != 3 || metrics.AdmissionStallNS != 17 {
 		t.Fatalf("unexpected speculation metrics: %#v", metrics)
+	}
+	if metrics.Dependency.Mode != control.DependencySummary ||
+		metrics.Dependency.Information != control.DependencyInformationStaticProgram ||
+		metrics.Dependency.AcquisitionNS != 5 || metrics.Dependency.RepresentationNS != 7 ||
+		metrics.Dependency.ResolutionNS != 11 || metrics.Dependency.TraversalSteps != 3 ||
+		metrics.Dependency.PostGuidanceReexecutionUnits != 4 {
+		t.Fatalf("unexpected dependency metrics: %#v", metrics.Dependency)
 	}
 	if metrics.CompletedTransactionsPerS != 2 || metrics.CommittedGoodputPerS != 1 || metrics.PolicyDecisionNS != 11 || metrics.MaxRSSBytes != 4096 {
 		t.Fatalf("unexpected rate/provenance metrics: %#v", metrics)

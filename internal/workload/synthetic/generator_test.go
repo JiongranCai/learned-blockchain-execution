@@ -155,6 +155,62 @@ func TestGeneratedArtifactFreezesLogicalIDsAndInformationBoundary(t *testing.T) 
 	}
 }
 
+func TestStateDependentBranchShapeRecordsActualPathWithoutLeakingIt(t *testing.T) {
+	config := synthetic.Config{
+		Seed:                 73,
+		InitialKeys:          16,
+		KeySpace:             8,
+		BlockCount:           1,
+		TransactionsPerBlock: 32,
+		MaxComputeUnits:      1,
+		TransactionMaxUnits:  8,
+		ProgramShape:         synthetic.ProgramShapeStateDependentBranch,
+	}
+	artifact, err := synthetic.Generate(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := artifact.NewState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := executeArtifact(t, artifact.OrderedBlocks, state)
+	if len(results) != 1 || len(results[0].Transactions) != config.TransactionsPerBlock {
+		t.Fatalf("unexpected result shape: %#v", results)
+	}
+
+	taken, untaken := 0, 0
+	for index, transaction := range results[0].Transactions {
+		truth := artifact.GroundTruth[index]
+		if len(transaction.Reads) != 2 || len(truth.Accesses) != 3 {
+			t.Fatalf("transaction %d did not execute selector + one branch read + write: result=%#v truth=%#v", index, transaction, truth)
+		}
+		readInstructions := 0
+		for _, instruction := range artifact.OrderedBlocks[0].Transactions[index].Program.Instructions {
+			if instruction.Op == model.OpRead {
+				readInstructions++
+			}
+		}
+		if readInstructions != 3 {
+			t.Fatalf("transaction %d does not expose both syntactic branch reads", index)
+		}
+		if len(truth.Branches) == 0 {
+			t.Fatalf("transaction %d omits branch ground truth", index)
+		}
+		if truth.Branches[0].Taken {
+			taken++
+		} else {
+			untaken++
+		}
+	}
+	if taken == 0 || untaken == 0 {
+		t.Fatalf("seed did not exercise both state-dependent paths: taken=%d untaken=%d", taken, untaken)
+	}
+	if len(artifact.EngineVisibleMetadata) != 0 {
+		t.Fatalf("branch ground truth leaked through metadata: %#v", artifact.EngineVisibleMetadata)
+	}
+}
+
 func TestGenerateRejectsInvalidConfig(t *testing.T) {
 	valid := testConfig()
 	tests := []struct {
@@ -168,6 +224,15 @@ func TestGenerateRejectsInvalidConfig(t *testing.T) {
 		{"block count", func(c *synthetic.Config) { c.BlockCount = 0 }, synthetic.ErrInvalidBlockCount},
 		{"transactions", func(c *synthetic.Config) { c.TransactionsPerBlock = 0 }, synthetic.ErrInvalidTransactions},
 		{"negative failure interval", func(c *synthetic.Config) { c.FailureEvery = -1 }, synthetic.ErrInvalidFailureInterval},
+		{"unknown program shape", func(c *synthetic.Config) { c.ProgramShape = "unknown" }, synthetic.ErrInvalidProgramShape},
+		{"branch selector key space", func(c *synthetic.Config) {
+			c.ProgramShape = synthetic.ProgramShapeStateDependentBranch
+			c.KeySpace = c.InitialKeys
+		}, synthetic.ErrBranchKeySpace},
+		{"branch budget too small", func(c *synthetic.Config) {
+			c.ProgramShape = synthetic.ProgramShapeStateDependentBranch
+			c.TransactionMaxUnits = c.MaxComputeUnits + 6
+		}, synthetic.ErrInvalidTransactionBudget},
 		{"compute range overflow", func(c *synthetic.Config) { c.MaxComputeUnits = uint64(math.MaxInt64) }, synthetic.ErrInvalidTransactionBudget},
 		{"budget too small", func(c *synthetic.Config) { c.TransactionMaxUnits = c.MaxComputeUnits + 3 }, synthetic.ErrInvalidTransactionBudget},
 	}

@@ -54,17 +54,18 @@ type Trace struct {
 }
 
 type WorkCounters struct {
-	ExecutionAttempts             uint64 `json:"execution_attempts"`
-	ReexecutionAttempts           uint64 `json:"reexecution_attempts"`
-	UsefulExecutionUnits          uint64 `json:"useful_execution_units"`
-	ReexecutedExecutionUnits      uint64 `json:"reexecuted_execution_units"`
-	DiscardedExecutionUnits       uint64 `json:"discarded_execution_units"`
-	SpeculationLimit              uint64 `json:"speculation_limit"`
-	SpeculationLimitApplied       bool   `json:"speculation_limit_applied"`
-	SpeculationTelemetryAvailable bool   `json:"speculation_telemetry_available"`
-	PeakSpeculativeInflight       uint64 `json:"peak_speculative_inflight"`
-	AdmissionStallEvents          uint64 `json:"admission_stall_events"`
-	AdmissionStallNS              uint64 `json:"admission_stall_ns"`
+	ExecutionAttempts             uint64             `json:"execution_attempts"`
+	ReexecutionAttempts           uint64             `json:"reexecution_attempts"`
+	UsefulExecutionUnits          uint64             `json:"useful_execution_units"`
+	ReexecutedExecutionUnits      uint64             `json:"reexecuted_execution_units"`
+	DiscardedExecutionUnits       uint64             `json:"discarded_execution_units"`
+	SpeculationLimit              uint64             `json:"speculation_limit"`
+	SpeculationLimitApplied       bool               `json:"speculation_limit_applied"`
+	SpeculationTelemetryAvailable bool               `json:"speculation_telemetry_available"`
+	PeakSpeculativeInflight       uint64             `json:"peak_speculative_inflight"`
+	AdmissionStallEvents          uint64             `json:"admission_stall_events"`
+	AdmissionStallNS              uint64             `json:"admission_stall_ns"`
+	Dependency                    DependencyCounters `json:"dependency"`
 }
 
 // Recorder accepts concurrent event emissions. Snapshot returns a stable

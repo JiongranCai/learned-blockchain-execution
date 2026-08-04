@@ -11,7 +11,7 @@ import (
 	storetypes "cosmossdk.io/store/types"
 )
 
-// SpeculationStats describes the optional CQ2 admission limiter. A zero
+// SpeculationStats describes the optional speculation admission limiter. A zero
 // configured limit means the original full-block window (W). Exact peak and
 // stall telemetry is available only when a finite limit below W is applied;
 // the original ExecuteBlock path remains untouched for the B0 baseline.
@@ -42,6 +42,32 @@ func ExecuteBlockWithMaxSpeculativeInflight(
 	maxInflight int,
 	txExecutor TxExecutor,
 ) (SpeculationStats, error) {
+	return ExecuteBlockWithMaxSpeculativeInflightAndEstimates(
+		ctx,
+		blockSize,
+		stores,
+		storage,
+		executors,
+		maxInflight,
+		nil,
+		txExecutor,
+	)
+}
+
+// ExecuteBlockWithMaxSpeculativeInflightAndEstimates composes admission
+// limiting with optional, untrusted static write-location estimates. Estimates
+// only cause logical waits: an omitted or extra location cannot bypass normal
+// read-set validation and reexecution.
+func ExecuteBlockWithMaxSpeculativeInflightAndEstimates(
+	ctx context.Context,
+	blockSize int,
+	stores map[storetypes.StoreKey]int,
+	storage MultiStore,
+	executors int,
+	maxInflight int,
+	estimates []MultiLocations,
+	txExecutor TxExecutor,
+) (SpeculationStats, error) {
 	if blockSize < 0 {
 		return SpeculationStats{}, fmt.Errorf("invalid block size: %d", blockSize)
 	}
@@ -50,6 +76,9 @@ func ExecuteBlockWithMaxSpeculativeInflight(
 	}
 	if maxInflight < 0 {
 		return SpeculationStats{}, fmt.Errorf("invalid max speculative inflight: %d", maxInflight)
+	}
+	if len(estimates) > blockSize {
+		return SpeculationStats{}, fmt.Errorf("estimate count %d exceeds block size %d", len(estimates), blockSize)
 	}
 	if executors == 0 {
 		executors = maxParallelism()
@@ -61,11 +90,14 @@ func ExecuteBlockWithMaxSpeculativeInflight(
 	}
 	stats := SpeculationStats{EffectiveLimit: uint64(effectiveLimit)}
 	if blockSize == 0 || maxInflight == 0 || maxInflight >= blockSize {
-		return stats, ExecuteBlock(ctx, blockSize, stores, storage, executors, txExecutor)
+		if len(estimates) == 0 {
+			return stats, ExecuteBlock(ctx, blockSize, stores, storage, executors, txExecutor)
+		}
+		return stats, ExecuteBlockWithEstimates(ctx, blockSize, stores, storage, executors, estimates, txExecutor)
 	}
 
 	scheduler := newAdmissionScheduler(blockSize, effectiveLimit)
-	mvMemory := NewMVMemory(blockSize, stores, storage, scheduler.base)
+	mvMemory := NewMVMemoryWithEstimates(blockSize, stores, storage, scheduler.base, estimates)
 
 	var workers sync.WaitGroup
 	workers.Add(executors)

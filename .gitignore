@@ -1,15 +1,29 @@
-# Local research notes, progress handoffs, and generated reports
+# Private research material and local reports
 /references/
 /docs/
 /artifacts/
 
-# Generated experiment and diagnostic output
+# Generated experiment, build, and diagnostic output
 /tmp/
 /results/
 /logs/
+/bin/
+/dist/
 *.test
 *.prof
+*.pprof
+*.out
 coverage.out
+*.coverprofile
+
+# Local configuration, editor state, and secrets
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+*.swp
+*~
 
 # OS metadata
 .DS_Store

@@ -69,6 +69,10 @@ func (e *Engine) ExecuteBlock(
 	if config.MaxSpeculativeInflight < 0 {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, engineapi.ErrInvalidSpeculationLimit
 	}
+	dependencyMode, dependencyInformation, err := engineapi.EffectiveDependencyControl(config)
+	if err != nil {
+		return model.BlockResult{}, control.Trace{Engine: engineName}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, err
 	}
@@ -112,6 +116,17 @@ func (e *Engine) ExecuteBlock(
 		return model.BlockResult{}, trace(), err
 	}
 	kernelStorage := newKernelStorage(e.stores, e.storeKey, initial.Snapshot())
+	dependency, err := prepareDependency(
+		ctx,
+		block,
+		dependencyMode,
+		dependencyInformation,
+		e.stores[e.storeKey],
+		traceMode != control.TraceOff,
+	)
+	if err != nil {
+		return model.BlockResult{}, trace(), err
+	}
 	slots := make([]resultSlot, len(block.Transactions))
 	executionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -121,6 +136,11 @@ func (e *Engine) ExecuteBlock(
 		transactionIndex := int(index)
 		if transactionIndex < 0 || transactionIndex >= len(block.Transactions) {
 			executionErrors.set(fmt.Errorf("kernel returned invalid transaction index %d", index))
+			cancel()
+			return
+		}
+		if err := dependency.controller.Wait(executionCtx, transactionIndex); err != nil {
+			executionErrors.set(err)
 			cancel()
 			return
 		}
@@ -181,15 +201,17 @@ func (e *Engine) ExecuteBlock(
 			view.CommitTo(adapter)
 		}
 		slots[transactionIndex].store(incarnation, txResult, traceMode != control.TraceOff)
+		dependency.controller.Complete(transactionIndex)
 	}
 
-	speculation, err := kernel.ExecuteBlockWithMaxSpeculativeInflight(
+	speculation, err := kernel.ExecuteBlockWithMaxSpeculativeInflightAndEstimates(
 		executionCtx,
 		len(block.Transactions),
 		e.stores,
 		kernelStorage,
 		config.Executors,
 		config.MaxSpeculativeInflight,
+		dependency.estimates,
 		txExecutor,
 	)
 	if executionErr := executionErrors.get(); executionErr != nil {
@@ -242,6 +264,13 @@ func (e *Engine) ExecuteBlock(
 		for index := range slots {
 			addWorkCounters(&finalTrace.Work, slots[index].work())
 		}
+		postGuidanceReexecutions := uint64(0)
+		postGuidanceReexecutionUnits := uint64(0)
+		if dependency.controller != nil {
+			postGuidanceReexecutions = finalTrace.Work.ReexecutionAttempts
+			postGuidanceReexecutionUnits = finalTrace.Work.ReexecutedExecutionUnits
+		}
+		finalTrace.Work.Dependency = dependency.Counters(postGuidanceReexecutions, postGuidanceReexecutionUnits)
 	}
 	return result, finalTrace, nil
 }
