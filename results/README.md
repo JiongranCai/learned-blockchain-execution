@@ -55,6 +55,11 @@ purpose or sequence suffix. Never reuse a completed run ID.
    compressed archive are ignored by Git.
 9. Transfer the archive separately and keep at least one additional backup.
 
+Large exploratory searches may use an auxiliary archive so formal evidence
+stays compact. Record every auxiliary archive, role, byte size, and SHA-256 in
+`index.json` and `archives/SHA256SUMS`; document any intentional exclusions in
+the run manifest or pilot inventory.
+
 To restore a downloaded archive placed in `results/archives/`:
 
 ```sh

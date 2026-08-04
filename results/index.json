@@ -17,6 +17,30 @@
         "archive_sha256": "3a4f726d63605045640651d7bd519a08644cf52dc79f894d4718e735fc1b8ad6"
       },
       "formal_report": "runs/2026-08-04-linux-learnexec-metal-01-cf9ad996/formal/REPORT.md"
+    },
+    {
+      "run_id": "2026-08-04-linux-learnexec-metal-01-e09c65a-hotspot-02",
+      "path": "runs/2026-08-04-linux-learnexec-metal-01-e09c65a-hotspot-02",
+      "status": "complete",
+      "run_classes": [
+        "formal"
+      ],
+      "source_commit": "e09c65ad4434ff1c6d68c1f8eeaf767e5726e050",
+      "storage": {
+        "mode": "external_archives",
+        "archive_path": "archives/2026-08-04-linux-learnexec-metal-01-e09c65a-hotspot-02.tar.gz",
+        "archive_size_bytes": 12759361,
+        "archive_sha256": "0b634e4760d57aba4c7cabeaa3d24d972d32d4ea5056230b1b5d072c50d13eb2",
+        "auxiliary_archives": [
+          {
+            "role": "pilot_search_non_formal",
+            "archive_path": "archives/2026-08-04-linux-hotspot-window-pilot-search.tar.gz",
+            "archive_size_bytes": 904984,
+            "archive_sha256": "b704368088249e3123762fd5de8c691496c7daadb6484f3f787bbf4b9201cec9"
+          }
+        ]
+      },
+      "formal_report": "runs/2026-08-04-linux-learnexec-metal-01-e09c65a-hotspot-02/formal/REPORT.md"
     }
   ]
 }
