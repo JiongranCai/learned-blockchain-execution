@@ -30,7 +30,7 @@ func TestValidateAndRunUseFrozenBundleAndVersionedTelemetry(t *testing.T) {
 		t.Fatalf("validation bundle did not bind speculation limits: %#v", bundle.ValidatedCases)
 	}
 	if bundle.ValidatedCases[0].DependencyMode != control.DependencyMVCCRuntime ||
-		bundle.ValidatedCases[0].DependencyInformation != control.DependencyInformationRuntime {
+		bundle.ValidatedCases[0].DependencySource != control.DependencySourceRuntimeObserved {
 		t.Fatalf("validation bundle did not bind dependency controls: %#v", bundle.ValidatedCases)
 	}
 
@@ -52,7 +52,7 @@ func TestValidateAndRunUseFrozenBundleAndVersionedTelemetry(t *testing.T) {
 	}
 	if response.Record.Case.DependencyMode != control.DependencyMVCCRuntime ||
 		response.Record.Metrics.Dependency.Mode != control.DependencyMVCCRuntime ||
-		response.Record.Metrics.Dependency.Information != control.DependencyInformationRuntime {
+		response.Record.Metrics.Dependency.Source != control.DependencySourceRuntimeObserved {
 		t.Fatalf("dependency case/metrics are incomplete: %#v", response.Record)
 	}
 	if response.Record.Provenance.ProcessID == 0 || len(response.Record.Provenance.BinarySHA256) != 64 ||
@@ -126,7 +126,7 @@ func TestRunPreservesFailureRecord(t *testing.T) {
 func TestConfigParserRejectsUnknownFieldsAndUnfrozenFormalEnvironment(t *testing.T) {
 	directory := t.TempDir()
 	unknownPath := filepath.Join(directory, "unknown.json")
-	if err := os.WriteFile(unknownPath, []byte(`{"schema_version":"experiment-matrix-v3","unknown":true}`), 0o600); err != nil {
+	if err := os.WriteFile(unknownPath, []byte(`{"schema_version":"experiment-matrix-v4","unknown":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := experiment.LoadConfig(unknownPath); !errors.Is(err, experiment.ErrInvalidConfig) {
@@ -165,7 +165,7 @@ func TestConfigParserRejectsUnknownFieldsAndUnfrozenFormalEnvironment(t *testing
 	loaded = writeTestConfig(t)
 	config = loaded.Config
 	config.Cases[0].DependencyMode = control.DependencySummary
-	config.Cases[0].DependencyInformation = control.DependencyInformationRuntime
+	config.Cases[0].DependencySource = control.DependencySourceRuntimeObserved
 	writeJSONFile(t, loaded.Path, config)
 	if _, err := experiment.LoadConfig(loaded.Path); !errors.Is(err, experiment.ErrInvalidConfig) {
 		t.Fatalf("guided dependency mode without static information: got %v", err)
@@ -176,7 +176,7 @@ func TestConfigParserRejectsUnknownFieldsAndUnfrozenFormalEnvironment(t *testing
 	config.Cases[0].Engine = "serial"
 	config.Cases[0].Policy = "serial_preset"
 	config.Cases[0].MaxSpeculativeInflight = 1
-	config.Cases[0].DependencyInformation = control.DependencyInformationStaticProgram
+	config.Cases[0].DependencySource = control.DependencySourceStaticProgram
 	writeJSONFile(t, loaded.Path, config)
 	if _, err := experiment.LoadConfig(loaded.Path); !errors.Is(err, experiment.ErrInvalidConfig) {
 		t.Fatalf("serial dependency static information: got %v", err)
@@ -239,9 +239,9 @@ func writeTestConfig(t *testing.T) experiment.LoadedConfig {
 			ProcessReuse: "fresh_process_per_run",
 		},
 		Cases: []experiment.CaseConfig{
-			{ID: "off", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, MaxSpeculativeInflight: 2, DependencyMode: control.DependencyMVCCRuntime, DependencyInformation: control.DependencyInformationRuntime, TraceMode: control.TraceOff},
-			{ID: "counters", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, MaxSpeculativeInflight: 2, DependencyMode: control.DependencyMVCCRuntime, DependencyInformation: control.DependencyInformationRuntime, TraceMode: control.TraceCounters},
-			{ID: "detailed", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, MaxSpeculativeInflight: 1, DependencyMode: control.DependencyMVCCRuntime, DependencyInformation: control.DependencyInformationRuntime, TraceMode: control.TraceDetailed},
+			{ID: "off", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, MaxSpeculativeInflight: 2, DependencyMode: control.DependencyMVCCRuntime, DependencySource: control.DependencySourceRuntimeObserved, TraceMode: control.TraceOff},
+			{ID: "counters", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, MaxSpeculativeInflight: 2, DependencyMode: control.DependencyMVCCRuntime, DependencySource: control.DependencySourceRuntimeObserved, TraceMode: control.TraceCounters},
+			{ID: "detailed", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, MaxSpeculativeInflight: 1, DependencyMode: control.DependencyMVCCRuntime, DependencySource: control.DependencySourceRuntimeObserved, TraceMode: control.TraceDetailed},
 		},
 		Output: experiment.OutputConfig{
 			ValidationBundle:  filepath.Join(directory, "validation-bundle.json"),

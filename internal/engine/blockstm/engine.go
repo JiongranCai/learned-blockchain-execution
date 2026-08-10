@@ -69,7 +69,7 @@ func (e *Engine) ExecuteBlock(
 	if config.MaxSpeculativeInflight < 0 {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, engineapi.ErrInvalidSpeculationLimit
 	}
-	dependencyMode, dependencyInformation, err := engineapi.EffectiveDependencyControl(config)
+	dependencyMode, dependencySource, err := engineapi.EffectiveDependencyControl(config)
 	if err != nil {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, err
 	}
@@ -120,7 +120,7 @@ func (e *Engine) ExecuteBlock(
 		ctx,
 		block,
 		dependencyMode,
-		dependencyInformation,
+		dependencySource,
 		e.stores[e.storeKey],
 		traceMode != control.TraceOff,
 	)

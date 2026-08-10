@@ -13,7 +13,7 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/workload"
 )
 
-const ValidationBundleSchemaVersion = "validation-bundle-v3"
+const ValidationBundleSchemaVersion = "validation-bundle-v4"
 
 var (
 	ErrInvalidValidationBundle = errors.New("invalid validation bundle")
@@ -21,13 +21,13 @@ var (
 )
 
 type ValidatedCase struct {
-	ID                     string                        `json:"id"`
-	Engine                 string                        `json:"engine"`
-	Policy                 string                        `json:"policy"`
-	Executors              int                           `json:"executors"`
-	MaxSpeculativeInflight int                           `json:"max_speculative_inflight"`
-	DependencyMode         control.DependencyMode        `json:"dependency_mode"`
-	DependencyInformation  control.DependencyInformation `json:"dependency_information"`
+	ID                     string                   `json:"id"`
+	Engine                 string                   `json:"engine"`
+	Policy                 string                   `json:"policy"`
+	Executors              int                      `json:"executors"`
+	MaxSpeculativeInflight int                      `json:"max_speculative_inflight"`
+	DependencyMode         control.DependencyMode   `json:"dependency_mode"`
+	DependencySource       control.DependencySource `json:"dependency_source"`
 }
 
 type ValidationBundle struct {
@@ -73,13 +73,13 @@ func Validate(ctx context.Context, loaded LoadedConfig) (ValidationBundle, error
 		return ValidationBundle{}, err
 	}
 	oracleCase := CaseConfig{
-		ID:                    "serial-oracle",
-		Engine:                "serial",
-		Policy:                "serial_preset",
-		Executors:             1,
-		DependencyMode:        control.DependencyMVCCRuntime,
-		DependencyInformation: control.DependencyInformationRuntime,
-		TraceMode:             control.TraceOff,
+		ID:               "serial-oracle",
+		Engine:           "serial",
+		Policy:           "serial_preset",
+		Executors:        1,
+		DependencyMode:   control.DependencyMVCCRuntime,
+		DependencySource: control.DependencySourceRuntimeObserved,
+		TraceMode:        control.TraceOff,
 	}
 	oracleContext, cancel := context.WithTimeout(ctx, loaded.Timeout)
 	oracle, err := Execute(oracleContext, artifact, oracleCase, false)
@@ -132,7 +132,7 @@ func Validate(ctx context.Context, loaded LoadedConfig) (ValidationBundle, error
 				Executors:              experimentCase.Executors,
 				MaxSpeculativeInflight: experimentCase.MaxSpeculativeInflight,
 				DependencyMode:         experimentCase.DependencyMode,
-				DependencyInformation:  experimentCase.DependencyInformation,
+				DependencySource:       experimentCase.DependencySource,
 			})
 		}
 	}
@@ -430,7 +430,7 @@ func bundleHasCase(bundle ValidationBundle, experimentCase CaseConfig) bool {
 			candidate.Policy == experimentCase.Policy && candidate.Executors == experimentCase.Executors &&
 			candidate.MaxSpeculativeInflight == experimentCase.MaxSpeculativeInflight &&
 			candidate.DependencyMode == experimentCase.DependencyMode &&
-			candidate.DependencyInformation == experimentCase.DependencyInformation {
+			candidate.DependencySource == experimentCase.DependencySource {
 			return true
 		}
 	}

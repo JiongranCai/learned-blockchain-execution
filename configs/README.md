@@ -1,6 +1,6 @@
 # Experiment configuration contracts
 
-`experiment-matrix-v3` is the only input contract accepted by `bench validate` and `bench run`. Parsing rejects unknown fields, duplicate case identifiers, unsupported engines or policies, invalid trace modes, ambiguous workload sources, unfrozen workload hashes, implicit environment controls, negative speculation limits, invalid serial controls, illegal dependency mode/information pairs, and formal configurations with placeholder affinity, NUMA, or page-cache values.
+`experiment-matrix-v4` is the only input contract accepted by `bench validate` and `bench run`. Parsing rejects unknown fields, duplicate case identifiers, unsupported engines or policies, invalid trace modes, ambiguous workload sources, unfrozen workload hashes, implicit environment controls, negative speculation limits, invalid serial controls, illegal dependency mode/source pairs, and formal configurations with placeholder affinity, NUMA, or page-cache values.
 
 ## Execution controls
 
@@ -22,8 +22,10 @@ sampling; one models a read-modify-write against the same selected key.
 
 Dependency acquisition and dependency use are represented by separate fields so information cost cannot be hidden inside a mechanism label:
 
-- `dependency_information ∈ {runtime_observed, static_program}` selects acquisition. `static_program` scans only engine-visible transaction programs inside the timed interval and never reads workload ground truth.
+- `dependency_source ∈ {runtime_observed, static_program}` selects acquisition. `static_program` scans only engine-visible transaction programs inside the timed interval and never reads workload ground truth.
 - `dependency_mode ∈ {mvcc_runtime, declared_dag, summary, full_graph}` selects representation and scheduling use. Every guided mode requires `static_program`. The `mvcc_runtime/static_program` pair is an equal-information version-only ablation: it pays for the same scan but deliberately discards the static access sets.
+
+CQ3-I telemetry records when the source becomes available, its implementation version, whether the artifact enters the runtime kernel, is discarded, or feeds a representation, and the existing completeness/exactness and acquisition cost counters. No content hash is computed for the transient information artifact.
 
 Static program accesses are conservative syntactic sets. The current flat runtime gives complete coverage of every named state access, but branches, failures, gas exhaustion, or state errors can make the executed set smaller. Extra keys can delay work, while missing guidance is repaired by Block-STM validation and deterministic reexecution.
 
@@ -54,6 +56,8 @@ Smoke matrices may use fewer rounds, but their records remain pilot evidence and
 `experiments/baseline/` exercises the serial oracle, Block-STM adapter, validation bundle, telemetry modes, and isolated runner process. Its Linux formal template remains intentionally invalid until target-host controls are frozen.
 
 `experiments/speculation-window/` freezes `P=8` and compares the distinct effective admission choices `1/P/4P/W`. The anchor matrices contrast expensive low-conflict work with a cheap single-key hotspot chain. Boundary matrices keep the seed, transaction count, compute distribution, workers, and all other controls fixed while changing only `key_space` from 1 through 3. The hotspot/cold-tail matrix keeps `key_space=8192` while concentrating accesses on a small hot head and explicitly controlling read/write correlation.
+
+`experiments/dependency-acquisition/` is the isolated CQ3-I family. Its two smoke anchors and Linux formal template keep `P=8`, `L=W`, `dependency_mode=mvcc_runtime`, runtime validation/reexecution, and all representation consumers fixed. Only `dependency_source` changes between `runtime_observed` and `static_program`; the latter must report `discarded_after_acquisition`, zero representation time, and zero plan lookups.
 
 `experiments/dependency-guidance/` contains three comparison families:
 

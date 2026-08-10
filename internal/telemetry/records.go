@@ -10,22 +10,22 @@ import (
 )
 
 const (
-	BenchmarkRecordSchema  = "benchmark-run-v3"
-	ValidationRecordSchema = "validation-run-v3"
-	ActionTraceSchema      = "action-trace-v3"
+	BenchmarkRecordSchema  = "benchmark-run-v4"
+	ValidationRecordSchema = "validation-run-v4"
+	ActionTraceSchema      = "action-trace-v4"
 	AblationRecordSchema   = "telemetry-ablation-v1"
 )
 
 type Case struct {
-	ID                     string                        `json:"id"`
-	Engine                 string                        `json:"engine"`
-	Policy                 string                        `json:"policy"`
-	PolicyVersion          string                        `json:"policy_version"`
-	Executors              int                           `json:"executors"`
-	MaxSpeculativeInflight int                           `json:"max_speculative_inflight"`
-	DependencyMode         control.DependencyMode        `json:"dependency_mode"`
-	DependencyInformation  control.DependencyInformation `json:"dependency_information"`
-	TraceMode              control.TraceMode             `json:"trace_mode"`
+	ID                     string                   `json:"id"`
+	Engine                 string                   `json:"engine"`
+	Policy                 string                   `json:"policy"`
+	PolicyVersion          string                   `json:"policy_version"`
+	Executors              int                      `json:"executors"`
+	MaxSpeculativeInflight int                      `json:"max_speculative_inflight"`
+	DependencyMode         control.DependencyMode   `json:"dependency_mode"`
+	DependencySource       control.DependencySource `json:"dependency_source"`
+	TraceMode              control.TraceMode        `json:"trace_mode"`
 }
 
 type Environment struct {
@@ -261,7 +261,7 @@ func CollectMetrics(results []model.BlockResult, traces []control.Trace, executi
 	if workTelemetrySeen && !speculationTelemetrySeen {
 		metrics.Unavailable = append(metrics.Unavailable, "peak_speculative_inflight: original full-window path does not expose exact admission occupancy")
 	}
-	if dependencyTelemetrySeen && metrics.Dependency.Information == control.DependencyInformationRuntime && !metrics.Dependency.AcquisitionMeasured {
+	if dependencyTelemetrySeen && metrics.Dependency.Source == control.DependencySourceRuntimeObserved && !metrics.Dependency.AcquisitionMeasured {
 		metrics.Unavailable = append(metrics.Unavailable, "runtime_dependency_acquisition: frozen MVCC callbacks do not expose separate acquisition cost")
 	}
 	return metrics
@@ -270,7 +270,10 @@ func CollectMetrics(results []model.BlockResult, traces []control.Trace, executi
 func mergeDependencyCounters(target *control.DependencyCounters, source control.DependencyCounters, seen bool) {
 	if !seen {
 		target.Mode = source.Mode
-		target.Information = source.Information
+		target.Source = source.Source
+		target.SourceAvailableAt = source.SourceAvailableAt
+		target.SourceVersion = source.SourceVersion
+		target.AcquisitionDisposition = source.AcquisitionDisposition
 		target.InformationComplete = source.InformationComplete
 		target.InformationExact = source.InformationExact
 		target.AcquisitionMeasured = source.AcquisitionMeasured

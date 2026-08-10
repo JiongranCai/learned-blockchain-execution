@@ -20,7 +20,7 @@ if [[ ${#run_files[@]} -eq 0 ]]; then
   exit 1
 fi
 
-printf '%s\n' $'matrix\tcase\tmode\tinformation\tn\tmedian_ms\treexecuted_units\tacquisition_us\trepresentation_us\tresolution_worker_us\twait_worker_us\tedges\tsummary_entries'
+printf '%s\n' $'matrix\tcase\tmode\tsource\tn\tmedian_ms\treexecuted_units\tacquisition_us\trepresentation_us\tresolution_worker_us\twait_worker_us\tedges\tsummary_entries'
 
 for run_file in "${run_files[@]}"; do
   matrix="$(basename "$(dirname "${run_file}")")"
@@ -39,7 +39,7 @@ for run_file in "${run_files[@]}"; do
         $matrix,
         .[0].case.id,
         .[0].case.dependency_mode,
-        .[0].case.dependency_information,
+        .[0].case.dependency_source,
         length,
         ((map(.timing.execution_ns) | median) / 1000000),
         (map(.metrics.reexecuted_execution_units) | median),

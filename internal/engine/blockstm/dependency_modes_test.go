@@ -17,13 +17,13 @@ import (
 func TestDependencyModesMatchSerialAcrossSeedsLimitsAndWorkers(t *testing.T) {
 	controls := []struct {
 		mode        control.DependencyMode
-		information control.DependencyInformation
+		information control.DependencySource
 	}{
-		{control.DependencyMVCCRuntime, control.DependencyInformationRuntime},
-		{control.DependencyMVCCRuntime, control.DependencyInformationStaticProgram},
-		{control.DependencyDeclaredDAG, control.DependencyInformationStaticProgram},
-		{control.DependencySummary, control.DependencyInformationStaticProgram},
-		{control.DependencyFullGraph, control.DependencyInformationStaticProgram},
+		{control.DependencyMVCCRuntime, control.DependencySourceRuntimeObserved},
+		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram},
+		{control.DependencyDeclaredDAG, control.DependencySourceStaticProgram},
+		{control.DependencySummary, control.DependencySourceStaticProgram},
+		{control.DependencyFullGraph, control.DependencySourceStaticProgram},
 	}
 	for _, shape := range []struct {
 		name  string
@@ -71,7 +71,7 @@ func TestDependencyModesMatchSerialAcrossSeedsLimitsAndWorkers(t *testing.T) {
 										Executors:              workers,
 										MaxSpeculativeInflight: limit,
 										DependencyMode:         dependency.mode,
-										DependencyInformation:  dependency.information,
+										DependencySource:       dependency.information,
 									},
 								)
 								if err != nil {
@@ -110,18 +110,18 @@ func TestDependencyTelemetrySeparatesAcquisitionRepresentationAndUse(t *testing.
 	testCases := []struct {
 		name               string
 		mode               control.DependencyMode
-		information        control.DependencyInformation
+		information        control.DependencySource
 		wantAcquisition    bool
 		wantRepresentation bool
 		wantEdges          bool
 		wantSummary        bool
 		wantEstimates      bool
 	}{
-		{"runtime", control.DependencyMVCCRuntime, control.DependencyInformationRuntime, false, false, false, false, false},
-		{"equalized-version-only", control.DependencyMVCCRuntime, control.DependencyInformationStaticProgram, true, false, false, false, false},
-		{"declared-dag", control.DependencyDeclaredDAG, control.DependencyInformationStaticProgram, true, true, true, false, true},
-		{"summary", control.DependencySummary, control.DependencyInformationStaticProgram, true, true, false, true, true},
-		{"full-graph", control.DependencyFullGraph, control.DependencyInformationStaticProgram, true, true, true, false, true},
+		{"runtime", control.DependencyMVCCRuntime, control.DependencySourceRuntimeObserved, false, false, false, false, false},
+		{"equalized-version-only", control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, true, false, false, false, false},
+		{"declared-dag", control.DependencyDeclaredDAG, control.DependencySourceStaticProgram, true, true, true, false, true},
+		{"summary", control.DependencySummary, control.DependencySourceStaticProgram, true, true, false, true, true},
+		{"full-graph", control.DependencyFullGraph, control.DependencySourceStaticProgram, true, true, true, false, true},
 	}
 
 	for _, testCase := range testCases {
@@ -133,20 +133,20 @@ func TestDependencyTelemetrySeparatesAcquisitionRepresentationAndUse(t *testing.
 			_, trace, err := blockstm.New(nil).ExecuteBlock(
 				context.Background(), block, storage,
 				engineapi.RunConfig{
-					Executors:             8,
-					DependencyMode:        testCase.mode,
-					DependencyInformation: testCase.information,
-					TraceMode:             control.TraceCounters,
+					Executors:        8,
+					DependencyMode:   testCase.mode,
+					DependencySource: testCase.information,
+					TraceMode:        control.TraceCounters,
 				},
 			)
 			if err != nil {
 				t.Fatal(err)
 			}
 			dependency := trace.Work.Dependency
-			if dependency.Mode != testCase.mode || dependency.Information != testCase.information || !dependency.InformationComplete {
+			if dependency.Mode != testCase.mode || dependency.Source != testCase.information || !dependency.InformationComplete {
 				t.Fatalf("identity/completeness mismatch: %#v", dependency)
 			}
-			if dependency.InformationExact != (testCase.information == control.DependencyInformationRuntime) {
+			if dependency.InformationExact != (testCase.information == control.DependencySourceRuntimeObserved) {
 				t.Fatalf("information exactness mismatch: %#v", dependency)
 			}
 			if dependency.AcquisitionMeasured != testCase.wantAcquisition ||
@@ -182,8 +182,8 @@ func TestEngineRejectsIllegalDependencyControls(t *testing.T) {
 	}
 	for _, config := range []engineapi.RunConfig{
 		{Executors: 1, DependencyMode: control.DependencySummary},
-		{Executors: 1, DependencyMode: control.DependencySummary, DependencyInformation: control.DependencyInformationRuntime},
-		{Executors: 1, DependencyMode: control.DependencyMode("unknown"), DependencyInformation: control.DependencyInformationStaticProgram},
+		{Executors: 1, DependencyMode: control.DependencySummary, DependencySource: control.DependencySourceRuntimeObserved},
+		{Executors: 1, DependencyMode: control.DependencyMode("unknown"), DependencySource: control.DependencySourceStaticProgram},
 	} {
 		storage, stateErr := artifact.NewState()
 		if stateErr != nil {

@@ -1,5 +1,5 @@
 {
-  "schema_version": "experiment-matrix-v3",
+  "schema_version": "experiment-matrix-v4",
   "run_class": "smoke",
   "workload": {
     "synthetic": {
@@ -34,7 +34,7 @@
       "executors": 1,
       "max_speculative_inflight": 1,
       "dependency_mode": "mvcc_runtime",
-      "dependency_information": "runtime_observed",
+      "dependency_source": "runtime_observed",
       "trace_mode": "counters"
     },
     {
@@ -44,7 +44,7 @@
       "executors": 8,
       "max_speculative_inflight": 1,
       "dependency_mode": "mvcc_runtime",
-      "dependency_information": "runtime_observed",
+      "dependency_source": "runtime_observed",
       "trace_mode": "counters"
     },
     {
@@ -54,7 +54,7 @@
       "executors": 8,
       "max_speculative_inflight": 8,
       "dependency_mode": "mvcc_runtime",
-      "dependency_information": "runtime_observed",
+      "dependency_source": "runtime_observed",
       "trace_mode": "counters"
     },
     {
@@ -64,7 +64,7 @@
       "executors": 8,
       "max_speculative_inflight": 32,
       "dependency_mode": "mvcc_runtime",
-      "dependency_information": "runtime_observed",
+      "dependency_source": "runtime_observed",
       "trace_mode": "counters"
     },
     {
@@ -74,7 +74,7 @@
       "executors": 8,
       "max_speculative_inflight": 0,
       "dependency_mode": "mvcc_runtime",
-      "dependency_information": "runtime_observed",
+      "dependency_source": "runtime_observed",
       "trace_mode": "counters"
     }
   ],

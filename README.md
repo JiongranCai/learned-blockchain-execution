@@ -11,7 +11,9 @@ The current implementation focuses on a reproducible motivation and systems-eval
 - A common engine and policy interface shared by serial execution and Block-STM.
 - Seeded synthetic workloads with hash-sealed artifacts, configurable uniform or hotspot/cold-tail key-access distributions, stable operation identifiers, state-dependent branches, and an explicit boundary between engine-visible inputs and audit-only ground truth.
 - A configurable speculation window through `max_speculative_inflight`.
-- Dependency-information controls that separate information acquisition from representation and use:
+- Dependency controls that expose CQ3-I acquisition as `dependency_source` and keep the legacy representation/use bundle explicit:
+  - `runtime_observed` uses the mandatory MVCC runtime path;
+  - `static_program` scans engine-visible programs before execution; with `mvcc_runtime` the acquired artifact is measured and discarded;
   - `mvcc_runtime` discovers conflicts during execution;
   - `declared_dag` waits on direct static read-after-write predecessors;
   - `summary` uses a compact predecessor barrier;
@@ -71,6 +73,8 @@ Convenience scripts cover the implemented comparison families:
 ./scripts/run_dependency_guidance_smoke.sh
 ./scripts/summarize_dependency_guidance.sh
 ```
+
+CQ3-I acquisition-only smoke matrices live under `configs/experiments/dependency-acquisition/`. They hold `dependency_mode=mvcc_runtime`, `max_speculative_inflight=W`, and every consumer fixed while comparing `runtime_observed` with `static_program` acquisition paid then discarded.
 
 Smoke runs are correctness checks and pilot evidence. Formal performance runs belong on a controlled Linux server with frozen CPU affinity, NUMA policy, page-cache policy, toolchain, and statistical protocol. The committed formal templates intentionally reject placeholder environment controls.
 

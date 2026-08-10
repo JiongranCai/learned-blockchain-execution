@@ -29,15 +29,15 @@ type RunConfig struct {
 	// MaxSpeculativeInflight bounds admitted transactions beyond the stable
 	// validated frontier. Zero means the full block window (W).
 	MaxSpeculativeInflight int
-	// DependencyMode and DependencyInformation independently record the
+	// DependencyMode and DependencySource independently record the legacy
 	// representation/use and acquisition choices. Their zero values preserve
 	// the runtime-MVCC baseline for direct engine callers.
-	DependencyMode        control.DependencyMode
-	DependencyInformation control.DependencyInformation
-	OmitResultDigest      bool
+	DependencyMode   control.DependencyMode
+	DependencySource control.DependencySource
+	OmitResultDigest bool
 }
 
-func EffectiveDependencyControl(config RunConfig) (control.DependencyMode, control.DependencyInformation, error) {
+func EffectiveDependencyControl(config RunConfig) (control.DependencyMode, control.DependencySource, error) {
 	mode := config.DependencyMode
 	if mode == "" {
 		mode = control.DependencyMVCCRuntime
@@ -45,20 +45,20 @@ func EffectiveDependencyControl(config RunConfig) (control.DependencyMode, contr
 	if !control.ValidDependencyMode(mode) {
 		return "", "", fmt.Errorf("%w: unknown mode %q", ErrInvalidDependencyMode, mode)
 	}
-	information := config.DependencyInformation
-	if information == "" {
+	source := config.DependencySource
+	if source == "" {
 		if mode != control.DependencyMVCCRuntime {
 			return "", "", fmt.Errorf("%w: mode %q requires explicit information source", ErrInvalidDependencyMode, mode)
 		}
-		information = control.DependencyInformationRuntime
+		source = control.DependencySourceRuntimeObserved
 	}
-	if !control.ValidDependencyInformation(information) {
-		return "", "", fmt.Errorf("%w: unknown information source %q", ErrInvalidDependencyMode, information)
+	if !control.ValidDependencySource(source) {
+		return "", "", fmt.Errorf("%w: unknown information source %q", ErrInvalidDependencyMode, source)
 	}
-	if mode != control.DependencyMVCCRuntime && information != control.DependencyInformationStaticProgram {
-		return "", "", fmt.Errorf("%w: mode %q requires %q information", ErrInvalidDependencyMode, mode, control.DependencyInformationStaticProgram)
+	if mode != control.DependencyMVCCRuntime && source != control.DependencySourceStaticProgram {
+		return "", "", fmt.Errorf("%w: mode %q requires %q information", ErrInvalidDependencyMode, mode, control.DependencySourceStaticProgram)
 	}
-	return mode, information, nil
+	return mode, source, nil
 }
 
 func EffectiveTraceMode(config RunConfig) (control.TraceMode, error) {

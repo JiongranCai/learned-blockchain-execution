@@ -11,11 +11,11 @@ import (
 )
 
 func TestDependencyMatricesFreezeFourContrasts(t *testing.T) {
-	want := map[string]control.DependencyInformation{
-		string(control.DependencyMVCCRuntime): control.DependencyInformationRuntime,
-		string(control.DependencyDeclaredDAG): control.DependencyInformationStaticProgram,
-		string(control.DependencySummary):     control.DependencyInformationStaticProgram,
-		string(control.DependencyFullGraph):   control.DependencyInformationStaticProgram,
+	want := map[string]control.DependencySource{
+		string(control.DependencyMVCCRuntime): control.DependencySourceRuntimeObserved,
+		string(control.DependencyDeclaredDAG): control.DependencySourceStaticProgram,
+		string(control.DependencySummary):     control.DependencySourceStaticProgram,
+		string(control.DependencyFullGraph):   control.DependencySourceStaticProgram,
 	}
 	for _, name := range []string{"cheap-hotspot-smoke.json", "expensive-low-conflict-smoke.json", "state-dependent-branch-smoke.json"} {
 		t.Run(name, func(t *testing.T) {
@@ -30,8 +30,8 @@ func TestDependencyMatricesFreezeFourContrasts(t *testing.T) {
 				}
 				mode := string(experimentCase.DependencyMode)
 				information, exists := want[mode]
-				if !exists || experimentCase.DependencyInformation != information {
-					t.Fatalf("case %s has unexpected dependency control %s/%s", experimentCase.ID, mode, experimentCase.DependencyInformation)
+				if !exists || experimentCase.DependencySource != information {
+					t.Fatalf("case %s has unexpected dependency control %s/%s", experimentCase.ID, mode, experimentCase.DependencySource)
 				}
 				if seen[mode] {
 					t.Fatalf("duplicate dependency mode %s", mode)
@@ -53,7 +53,7 @@ func TestDependencyEqualInformationAblationUsesOneStaticSource(t *testing.T) {
 		control.DependencyFullGraph:   false,
 	}
 	for _, experimentCase := range loaded.Config.Cases {
-		if experimentCase.DependencyInformation != control.DependencyInformationStaticProgram {
+		if experimentCase.DependencySource != control.DependencySourceStaticProgram {
 			t.Fatalf("case %s gets a different information source", experimentCase.ID)
 		}
 		if _, exists := wantModes[experimentCase.DependencyMode]; !exists {
@@ -89,11 +89,11 @@ func TestSpeculationDependencyMatrixIsTwoByTwo(t *testing.T) {
 			t.Fatalf("case %s changes P=8", experimentCase.ID)
 		}
 		if experimentCase.DependencyMode == control.DependencyMVCCRuntime &&
-			experimentCase.DependencyInformation != control.DependencyInformationRuntime {
+			experimentCase.DependencySource != control.DependencySourceRuntimeObserved {
 			t.Fatalf("runtime cell %s does not use runtime information", experimentCase.ID)
 		}
 		if experimentCase.DependencyMode == control.DependencyDeclaredDAG &&
-			experimentCase.DependencyInformation != control.DependencyInformationStaticProgram {
+			experimentCase.DependencySource != control.DependencySourceStaticProgram {
 			t.Fatalf("guided cell %s does not use static program information", experimentCase.ID)
 		}
 	}

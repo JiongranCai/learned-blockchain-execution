@@ -33,7 +33,10 @@ func TestCollectMetricsUsesCanonicalResultsAndTraceCounters(t *testing.T) {
 			AdmissionStallNS:              17,
 			Dependency: control.DependencyCounters{
 				Mode:                         control.DependencySummary,
-				Information:                  control.DependencyInformationStaticProgram,
+				Source:                       control.DependencySourceStaticProgram,
+				SourceAvailableAt:            control.DependencyAvailableBeforeExecution,
+				SourceVersion:                control.DependencySourceVersionStaticScan,
+				AcquisitionDisposition:       control.DependencyDispositionRepresentation,
 				InformationComplete:          true,
 				InformationExact:             false,
 				AcquisitionMeasured:          true,
@@ -79,7 +82,7 @@ func TestCollectMetricsUsesCanonicalResultsAndTraceCounters(t *testing.T) {
 		t.Fatalf("unexpected speculation metrics: %#v", metrics)
 	}
 	if metrics.Dependency.Mode != control.DependencySummary ||
-		metrics.Dependency.Information != control.DependencyInformationStaticProgram ||
+		metrics.Dependency.Source != control.DependencySourceStaticProgram ||
 		metrics.Dependency.AcquisitionNS != 5 || metrics.Dependency.RepresentationNS != 7 ||
 		metrics.Dependency.ResolutionNS != 11 || metrics.Dependency.TraversalSteps != 3 ||
 		metrics.Dependency.PostGuidanceReexecutionUnits != 4 {

@@ -25,51 +25,33 @@ func prepareDependency(
 	ctx context.Context,
 	block model.Block,
 	mode control.DependencyMode,
-	information control.DependencyInformation,
+	source control.DependencySource,
 	storeIndex int,
 	capture bool,
 ) (dependencyPreparation, error) {
-	preparation := dependencyPreparation{base: control.DependencyCounters{
-		Mode:        mode,
-		Information: information,
-	}}
-	if information == control.DependencyInformationRuntime {
-		// The frozen MVCC kernel tracks actual dynamic reads completely, but it
-		// does not expose separate acquisition/traversal callbacks.
-		preparation.base.InformationComplete = true
-		preparation.base.InformationExact = true
-		return preparation, nil
-	}
-
-	acquisitionStarted := measuredStart(capture)
-	accesses, acquisition, err := analyzeStaticPrograms(ctx, block)
+	artifact, err := acquireDependencyInformation(ctx, block, source, capture)
 	if err != nil {
 		return dependencyPreparation{}, err
 	}
-	preparation.base.InformationComplete = acquisition.complete
-	// Syntactic sets conservatively include every named access. Branches,
-	// failures, gas, and state errors can make the executed set smaller, so
-	// static_program is coverage-complete but is never labeled exact.
-	preparation.base.InformationExact = false
-	preparation.base.AcquisitionMeasured = capture
-	preparation.base.AcquisitionNS = measuredElapsed(acquisitionStarted)
-	preparation.base.AcquisitionUnits = acquisition.units
-	preparation.base.AcquisitionBytes = acquisition.bytes
-	preparation.base.StaticReadKeys = acquisition.readKeys
-	preparation.base.StaticWriteKeys = acquisition.writeKeys
-
-	// mvcc_runtime + static_program is the equal-information version-only
-	// ablation: it pays acquisition cost but deliberately does not construct
-	// or use a static representation.
-	if mode == control.DependencyMVCCRuntime {
+	preparation := dependencyPreparation{base: artifact.counters(mode)}
+	if source == control.DependencySourceRuntimeObserved {
+		preparation.base.AcquisitionDisposition = control.DependencyDispositionRuntimeKernel
 		return preparation, nil
 	}
+
+	// CQ3-I acquisition isolation: pay for the static scan, then deliberately
+	// discard the artifact. Runtime MVCC remains the only correctness path.
+	if mode == control.DependencyMVCCRuntime {
+		preparation.base.AcquisitionDisposition = control.DependencyDispositionDiscarded
+		return preparation, nil
+	}
+	preparation.base.AcquisitionDisposition = control.DependencyDispositionRepresentation
 
 	representationStarted := measuredStart(capture)
 	var gate dependencyGate
 	switch mode {
 	case control.DependencyDeclaredDAG:
-		predecessors, edges, err := buildDeclaredRAWDAG(ctx, accesses)
+		predecessors, edges, err := buildDeclaredRAWDAG(ctx, artifact.staticAccesses)
 		if err != nil {
 			return dependencyPreparation{}, err
 		}
@@ -77,7 +59,7 @@ func prepareDependency(
 		preparation.base.DependencyEdges = edges
 		preparation.base.RepresentationLogicalBytes = uint64(len(predecessors))*8 + edges*8
 	case control.DependencySummary:
-		barriers, entries, err := buildDependencySummary(ctx, accesses)
+		barriers, entries, err := buildDependencySummary(ctx, artifact.staticAccesses)
 		if err != nil {
 			return dependencyPreparation{}, err
 		}
@@ -85,7 +67,7 @@ func prepareDependency(
 		preparation.base.SummaryEntries = entries
 		preparation.base.RepresentationLogicalBytes = uint64(len(barriers)) * 8
 	case control.DependencyFullGraph:
-		predecessors, edges, err := buildFullConflictGraph(ctx, accesses)
+		predecessors, edges, err := buildFullConflictGraph(ctx, artifact.staticAccesses)
 		if err != nil {
 			return dependencyPreparation{}, err
 		}
@@ -94,7 +76,7 @@ func prepareDependency(
 		preparation.base.RepresentationLogicalBytes = uint64(len(predecessors))*8 + edges*8
 	}
 	preparation.estimates, preparation.base.EstimatedWriteLocations, preparation.base.EstimatedWriteKeyBytes, err =
-		buildWriteEstimates(ctx, accesses, storeIndex)
+		buildWriteEstimates(ctx, artifact.staticAccesses, storeIndex)
 	if err != nil {
 		return dependencyPreparation{}, err
 	}
@@ -125,6 +107,75 @@ type staticAcquisition struct {
 	bytes     uint64
 	readKeys  uint64
 	writeKeys uint64
+}
+
+type dependencyInformationArtifact struct {
+	source         control.DependencySource
+	availableAt    string
+	version        string
+	complete       bool
+	exact          bool
+	measured       bool
+	elapsedNS      uint64
+	units          uint64
+	bytes          uint64
+	readKeys       uint64
+	writeKeys      uint64
+	staticAccesses []staticAccessSet
+}
+
+func acquireDependencyInformation(
+	ctx context.Context,
+	block model.Block,
+	source control.DependencySource,
+	capture bool,
+) (dependencyInformationArtifact, error) {
+	if source == control.DependencySourceRuntimeObserved {
+		return dependencyInformationArtifact{
+			source:      source,
+			availableAt: control.DependencyAvailableDuringExecution,
+			version:     control.DependencySourceVersionRuntimeMVCC,
+			complete:    true,
+			exact:       true,
+		}, nil
+	}
+
+	started := measuredStart(capture)
+	accesses, acquisition, err := analyzeStaticPrograms(ctx, block)
+	if err != nil {
+		return dependencyInformationArtifact{}, err
+	}
+	return dependencyInformationArtifact{
+		source:         source,
+		availableAt:    control.DependencyAvailableBeforeExecution,
+		version:        control.DependencySourceVersionStaticScan,
+		complete:       acquisition.complete,
+		exact:          false,
+		measured:       capture,
+		elapsedNS:      measuredElapsed(started),
+		units:          acquisition.units,
+		bytes:          acquisition.bytes,
+		readKeys:       acquisition.readKeys,
+		writeKeys:      acquisition.writeKeys,
+		staticAccesses: accesses,
+	}, nil
+}
+
+func (a dependencyInformationArtifact) counters(mode control.DependencyMode) control.DependencyCounters {
+	return control.DependencyCounters{
+		Mode:                mode,
+		Source:              a.source,
+		SourceAvailableAt:   a.availableAt,
+		SourceVersion:       a.version,
+		InformationComplete: a.complete,
+		InformationExact:    a.exact,
+		AcquisitionMeasured: a.measured,
+		AcquisitionNS:       a.elapsedNS,
+		AcquisitionUnits:    a.units,
+		AcquisitionBytes:    a.bytes,
+		StaticReadKeys:      a.readKeys,
+		StaticWriteKeys:     a.writeKeys,
+	}
 }
 
 type staticAccessSet struct {

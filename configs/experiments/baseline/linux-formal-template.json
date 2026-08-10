@@ -1,5 +1,5 @@
 {
-  "schema_version": "experiment-matrix-v3",
+  "schema_version": "experiment-matrix-v4",
   "run_class": "formal",
   "workload": {
     "synthetic": {
@@ -34,7 +34,7 @@
       "executors": 2,
       "max_speculative_inflight": 0,
       "dependency_mode": "mvcc_runtime",
-      "dependency_information": "runtime_observed",
+      "dependency_source": "runtime_observed",
       "trace_mode": "off"
     },
     {
@@ -44,7 +44,7 @@
       "executors": 2,
       "max_speculative_inflight": 0,
       "dependency_mode": "mvcc_runtime",
-      "dependency_information": "runtime_observed",
+      "dependency_source": "runtime_observed",
       "trace_mode": "counters"
     }
   ],

@@ -66,7 +66,7 @@ func TestStaticDependencyRepresentationsShareAcquiredInformation(t *testing.T) {
 			context.Background(),
 			block,
 			mode,
-			control.DependencyInformationStaticProgram,
+			control.DependencySourceStaticProgram,
 			0,
 			true,
 		)
@@ -94,6 +94,50 @@ func TestStaticDependencyRepresentationsShareAcquiredInformation(t *testing.T) {
 			!preparation.base.RepresentationMeasured || !preparation.base.ResolutionMeasured {
 			t.Fatalf("unexpected prepared counters for %s: %#v", mode, preparation.base)
 		}
+	}
+}
+
+func TestCQ3IAcquisitionIsolation(t *testing.T) {
+	block := model.Block{ID: "cq3-i", Transactions: []model.Transaction{
+		dependencyTestTransaction("t0",
+			model.Instruction{Op: model.OpRead, Key: []byte("a")},
+			model.Instruction{Op: model.OpWrite, Key: []byte("b")},
+		),
+	}}
+
+	runtime, err := prepareDependency(
+		context.Background(), block, control.DependencyMVCCRuntime,
+		control.DependencySourceRuntimeObserved, 0, true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.base.SourceAvailableAt != control.DependencyAvailableDuringExecution ||
+		runtime.base.SourceVersion != control.DependencySourceVersionRuntimeMVCC ||
+		runtime.base.AcquisitionDisposition != control.DependencyDispositionRuntimeKernel ||
+		!runtime.base.InformationComplete || !runtime.base.InformationExact ||
+		runtime.base.AcquisitionMeasured {
+		t.Fatalf("unexpected runtime acquisition: %#v", runtime.base)
+	}
+
+	static, err := prepareDependency(
+		context.Background(), block, control.DependencyMVCCRuntime,
+		control.DependencySourceStaticProgram, 0, true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if static.base.SourceAvailableAt != control.DependencyAvailableBeforeExecution ||
+		static.base.SourceVersion != control.DependencySourceVersionStaticScan ||
+		static.base.AcquisitionDisposition != control.DependencyDispositionDiscarded ||
+		!static.base.InformationComplete || static.base.InformationExact ||
+		!static.base.AcquisitionMeasured || static.base.AcquisitionUnits != 2 ||
+		static.base.StaticReadKeys != 1 || static.base.StaticWriteKeys != 1 {
+		t.Fatalf("unexpected static acquisition: %#v", static.base)
+	}
+	if static.controller != nil || len(static.estimates) != 0 ||
+		static.base.RepresentationMeasured || static.base.ResolutionMeasured {
+		t.Fatalf("CQ3-I static artifact escaped into representation/use: %#v", static)
 	}
 }
 

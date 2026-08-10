@@ -4,15 +4,15 @@
   "workload": {
     "synthetic": {
       "seed": 20260802,
-      "initial_keys": 512,
-      "key_space": 2,
+      "initial_keys": 8,
+      "key_space": 1,
       "block_count": 1,
       "transactions_per_block": 512,
-      "max_compute_units": 5000,
-      "transaction_max_units": 5004,
+      "max_compute_units": 100,
+      "transaction_max_units": 104,
       "failure_every": 0
     },
-    "expected_hash": "09a468f4505baad65bc721bac593a5c44f8b4c8beb4df7cdc13a2b4bb267f6e8"
+    "expected_hash": "5f06a85c3e71b3cda38e09b3fb94bdbb60c2ab6646211a535d15818cc4940ab9"
   },
   "statistical_protocol": "configs/statistical/protocol-v1.json",
   "warmup_rounds": 3,
@@ -28,7 +28,7 @@
   },
   "cases": [
     {
-      "id": "runtime",
+      "id": "runtime-observed",
       "engine": "blockstm",
       "policy": "blockstm_preset",
       "executors": 8,
@@ -38,40 +38,20 @@
       "trace_mode": "counters"
     },
     {
-      "id": "declared-dag",
+      "id": "static-scan-discarded",
       "engine": "blockstm",
       "policy": "blockstm_preset",
       "executors": 8,
       "max_speculative_inflight": 0,
-      "dependency_mode": "declared_dag",
-      "dependency_source": "static_program",
-      "trace_mode": "counters"
-    },
-    {
-      "id": "summary",
-      "engine": "blockstm",
-      "policy": "blockstm_preset",
-      "executors": 8,
-      "max_speculative_inflight": 0,
-      "dependency_mode": "summary",
-      "dependency_source": "static_program",
-      "trace_mode": "counters"
-    },
-    {
-      "id": "full-graph",
-      "engine": "blockstm",
-      "policy": "blockstm_preset",
-      "executors": 8,
-      "max_speculative_inflight": 0,
-      "dependency_mode": "full_graph",
+      "dependency_mode": "mvcc_runtime",
       "dependency_source": "static_program",
       "trace_mode": "counters"
     }
   ],
   "output": {
-    "validation_bundle": "results/dependency-guidance/linux-formal/validation-bundle.json",
-    "validation_records": "results/dependency-guidance/linux-formal/validation.jsonl",
-    "run_records": "results/dependency-guidance/linux-formal/runs.jsonl",
-    "action_traces": "results/dependency-guidance/linux-formal/action-traces.jsonl"
+    "validation_bundle": "results/dependency-acquisition/linux-formal/validation-bundle.json",
+    "validation_records": "results/dependency-acquisition/linux-formal/validation.jsonl",
+    "run_records": "results/dependency-acquisition/linux-formal/runs.jsonl",
+    "action_traces": "results/dependency-acquisition/linux-formal/action-traces.jsonl"
   }
 }

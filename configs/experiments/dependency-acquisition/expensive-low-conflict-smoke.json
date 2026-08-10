@@ -28,7 +28,7 @@
   },
   "cases": [
     {
-      "id": "runtime",
+      "id": "runtime-observed",
       "engine": "blockstm",
       "policy": "blockstm_preset",
       "executors": 8,
@@ -38,40 +38,20 @@
       "trace_mode": "counters"
     },
     {
-      "id": "declared-dag",
+      "id": "static-scan-discarded",
       "engine": "blockstm",
       "policy": "blockstm_preset",
       "executors": 8,
       "max_speculative_inflight": 0,
-      "dependency_mode": "declared_dag",
-      "dependency_source": "static_program",
-      "trace_mode": "counters"
-    },
-    {
-      "id": "summary",
-      "engine": "blockstm",
-      "policy": "blockstm_preset",
-      "executors": 8,
-      "max_speculative_inflight": 0,
-      "dependency_mode": "summary",
-      "dependency_source": "static_program",
-      "trace_mode": "counters"
-    },
-    {
-      "id": "full-graph",
-      "engine": "blockstm",
-      "policy": "blockstm_preset",
-      "executors": 8,
-      "max_speculative_inflight": 0,
-      "dependency_mode": "full_graph",
+      "dependency_mode": "mvcc_runtime",
       "dependency_source": "static_program",
       "trace_mode": "counters"
     }
   ],
   "output": {
-    "validation_bundle": "results/dependency-guidance/expensive-low-conflict/validation-bundle.json",
-    "validation_records": "results/dependency-guidance/expensive-low-conflict/validation.jsonl",
-    "run_records": "results/dependency-guidance/expensive-low-conflict/runs.jsonl",
-    "action_traces": "results/dependency-guidance/expensive-low-conflict/action-traces.jsonl"
+    "validation_bundle": "results/dependency-acquisition/expensive-low-conflict/validation-bundle.json",
+    "validation_records": "results/dependency-acquisition/expensive-low-conflict/validation.jsonl",
+    "run_records": "results/dependency-acquisition/expensive-low-conflict/runs.jsonl",
+    "action_traces": "results/dependency-acquisition/expensive-low-conflict/action-traces.jsonl"
   }
 }
