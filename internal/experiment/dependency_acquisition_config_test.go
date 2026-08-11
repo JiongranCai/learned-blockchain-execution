@@ -24,6 +24,8 @@ func TestCQ3IAcquisitionMatricesFreezeOtherDependencyControls(t *testing.T) {
 				if experimentCase.Engine != "blockstm" || experimentCase.Executors != 8 ||
 					experimentCase.MaxSpeculativeInflight != 0 ||
 					experimentCase.DependencyMode != control.DependencyMVCCRuntime ||
+					experimentCase.DependencyRepresentation != control.DependencyRepresentationVersionOnly ||
+					experimentCase.DependencyRepresentationBuilder != control.DependencyRepresentationBuilderNone ||
 					experimentCase.TraceMode != control.TraceCounters {
 					t.Fatalf("case %s changes a frozen non-CQ3-I control", experimentCase.ID)
 				}

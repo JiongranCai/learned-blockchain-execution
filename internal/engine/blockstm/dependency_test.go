@@ -2,10 +2,12 @@ package blockstm
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/crypto-org-chain/go-block-stm/internal/control"
+	engineapi "github.com/crypto-org-chain/go-block-stm/internal/engine"
 	"github.com/crypto-org-chain/go-block-stm/internal/model"
 )
 
@@ -62,14 +64,13 @@ func TestStaticDependencyRepresentationsShareAcquiredInformation(t *testing.T) {
 		control.DependencySummary,
 		control.DependencyFullGraph,
 	} {
-		preparation, err := prepareDependency(
-			context.Background(),
-			block,
-			mode,
-			control.DependencySourceStaticProgram,
-			0,
-			true,
-		)
+		plan, err := engineapi.EffectiveDependencyControl(engineapi.RunConfig{
+			DependencyMode: mode, DependencySource: control.DependencySourceStaticProgram,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		preparation, err := prepareDependency(context.Background(), block, plan, 0, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -106,8 +107,10 @@ func TestCQ3IAcquisitionIsolation(t *testing.T) {
 	}}
 
 	runtime, err := prepareDependency(
-		context.Background(), block, control.DependencyMVCCRuntime,
-		control.DependencySourceRuntimeObserved, 0, true,
+		context.Background(), block, dependencyTestPlan(
+			control.DependencyMVCCRuntime, control.DependencySourceRuntimeObserved,
+			control.DependencyRepresentationVersionOnly, control.DependencyRepresentationBuilderNone,
+		), 0, true,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -121,8 +124,10 @@ func TestCQ3IAcquisitionIsolation(t *testing.T) {
 	}
 
 	static, err := prepareDependency(
-		context.Background(), block, control.DependencyMVCCRuntime,
-		control.DependencySourceStaticProgram, 0, true,
+		context.Background(), block, dependencyTestPlan(
+			control.DependencyMVCCRuntime, control.DependencySourceStaticProgram,
+			control.DependencyRepresentationVersionOnly, control.DependencyRepresentationBuilderNone,
+		), 0, true,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -138,6 +143,80 @@ func TestCQ3IAcquisitionIsolation(t *testing.T) {
 	if static.controller != nil || len(static.estimates) != 0 ||
 		static.base.RepresentationMeasured || static.base.ResolutionMeasured {
 		t.Fatalf("CQ3-I static artifact escaped into representation/use: %#v", static)
+	}
+}
+
+func TestCQ3RRepresentationIsolation(t *testing.T) {
+	block := model.Block{ID: "cq3-r", Transactions: []model.Transaction{
+		dependencyTestTransaction("t0", model.Instruction{Op: model.OpRead, Key: []byte("a")}, model.Instruction{Op: model.OpWrite, Key: []byte("b")}),
+		dependencyTestTransaction("t1", model.Instruction{Op: model.OpRead, Key: []byte("b")}, model.Instruction{Op: model.OpWrite, Key: []byte("a")}),
+		dependencyTestTransaction("t2", model.Instruction{Op: model.OpWrite, Key: []byte("b")}),
+	}}
+	testCases := []struct {
+		name           string
+		representation control.DependencyRepresentation
+		builder        control.DependencyRepresentationBuilder
+		wantEdges      bool
+		wantSummary    bool
+	}{
+		{"version-only", control.DependencyRepresentationVersionOnly, control.DependencyRepresentationBuilderNone, false, false},
+		{"raw-last-writer", control.DependencyRepresentationRAWLastWriter, control.DependencyRepresentationBuilderIndexedByKey, true, false},
+		{"max-raw-predecessor", control.DependencyRepresentationMaxRAWPredecessor, control.DependencyRepresentationBuilderIndexedByKey, false, true},
+		{"full-graph-reference", control.DependencyRepresentationFullConflictGraph, control.DependencyRepresentationBuilderQuadraticReference, true, false},
+		{"full-graph-indexed", control.DependencyRepresentationFullConflictGraph, control.DependencyRepresentationBuilderIndexedByKey, true, false},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			preparation, err := prepareDependency(
+				context.Background(), block,
+				dependencyTestPlan(control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, testCase.representation, testCase.builder),
+				0, true,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			counters := preparation.base
+			if preparation.controller != nil || len(preparation.estimates) != 0 ||
+				counters.ResolutionMeasured || counters.PlanLookups != 0 || counters.EstimatedWriteLocations != 0 {
+				t.Fatalf("CQ3-R representation reached a static consumer: %#v", preparation)
+			}
+			if testCase.representation == control.DependencyRepresentationVersionOnly {
+				if counters.RepresentationMeasured || counters.AcquisitionDisposition != control.DependencyDispositionDiscarded {
+					t.Fatalf("unexpected version-only counters: %#v", counters)
+				}
+				return
+			}
+			if counters.AcquisitionDisposition != control.DependencyDispositionRepresentationDiscarded ||
+				!counters.RepresentationMeasured || counters.RepresentationBuildUnits == 0 ||
+				counters.RepresentationLogicalBytes == 0 || counters.RepresentationEntries == 0 {
+				t.Fatalf("representation was not independently charged: %#v", counters)
+			}
+			if (counters.DependencyEdges > 0) != testCase.wantEdges ||
+				(counters.SummaryEntries > 0) != testCase.wantSummary {
+				t.Fatalf("unexpected representation topology: %#v", counters)
+			}
+		})
+	}
+}
+
+func TestIndexedFullConflictGraphMatchesQuadraticReference(t *testing.T) {
+	accesses := []staticAccessSet{
+		{reads: []string{"a"}, writes: []string{"b"}},
+		{reads: []string{"b"}, writes: []string{"c"}},
+		{reads: []string{"a", "c"}, writes: []string{"b"}},
+		{writes: []string{"a"}},
+		{reads: []string{"a", "b"}, writes: []string{"c"}},
+	}
+	want, wantEdges, err := buildFullConflictGraph(context.Background(), accesses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, gotEdges, units, err := buildFullConflictGraphIndexed(context.Background(), accesses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotEdges != wantEdges || !reflect.DeepEqual(got, want) || units == 0 {
+		t.Fatalf("indexed graph differs: got=%v/%d want=%v/%d units=%d", got, gotEdges, want, wantEdges, units)
 	}
 }
 
@@ -190,4 +269,15 @@ func TestDependencyGateCancellationIsBounded(t *testing.T) {
 
 func dependencyTestTransaction(id string, instructions ...model.Instruction) model.Transaction {
 	return model.Transaction{ID: id, MaxUnits: 100, Program: model.Program{Instructions: instructions}}
+}
+
+func dependencyTestPlan(
+	mode control.DependencyMode,
+	source control.DependencySource,
+	representation control.DependencyRepresentation,
+	builder control.DependencyRepresentationBuilder,
+) engineapi.DependencyPlan {
+	return engineapi.DependencyPlan{
+		Mode: mode, Source: source, Representation: representation, RepresentationBuilder: builder,
+	}
 }

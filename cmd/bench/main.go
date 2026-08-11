@@ -74,7 +74,7 @@ func run(arguments []string) error {
 func parseConfigFlag(command string, arguments []string) (string, error) {
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	configPath := flags.String("config", "", "path to experiment-matrix-v4 JSON")
+	configPath := flags.String("config", "", "path to experiment-matrix-v5 JSON")
 	if err := flags.Parse(arguments); err != nil {
 		return "", err
 	}

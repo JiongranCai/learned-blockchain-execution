@@ -18,7 +18,7 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/workload/synthetic"
 )
 
-const ConfigSchemaVersion = "experiment-matrix-v4"
+const ConfigSchemaVersion = "experiment-matrix-v5"
 
 var ErrInvalidConfig = errors.New("invalid experiment config")
 
@@ -44,27 +44,31 @@ type WorkloadConfig struct {
 }
 
 type CaseConfig struct {
-	ID                     string                   `json:"id"`
-	Engine                 string                   `json:"engine"`
-	Policy                 string                   `json:"policy"`
-	Executors              int                      `json:"executors"`
-	MaxSpeculativeInflight int                      `json:"max_speculative_inflight"`
-	DependencyMode         control.DependencyMode   `json:"dependency_mode"`
-	DependencySource       control.DependencySource `json:"dependency_source"`
-	TraceMode              control.TraceMode        `json:"trace_mode"`
+	ID                              string                                  `json:"id"`
+	Engine                          string                                  `json:"engine"`
+	Policy                          string                                  `json:"policy"`
+	Executors                       int                                     `json:"executors"`
+	MaxSpeculativeInflight          int                                     `json:"max_speculative_inflight"`
+	DependencyMode                  control.DependencyMode                  `json:"dependency_mode"`
+	DependencySource                control.DependencySource                `json:"dependency_source"`
+	DependencyRepresentation        control.DependencyRepresentation        `json:"dependency_representation"`
+	DependencyRepresentationBuilder control.DependencyRepresentationBuilder `json:"dependency_representation_builder"`
+	TraceMode                       control.TraceMode                       `json:"trace_mode"`
 }
 
 func (c CaseConfig) TelemetryCase() telemetry.Case {
 	return telemetry.Case{
-		ID:                     c.ID,
-		Engine:                 c.Engine,
-		Policy:                 c.Policy,
-		PolicyVersion:          fixed.PresetVersion,
-		Executors:              c.Executors,
-		MaxSpeculativeInflight: c.MaxSpeculativeInflight,
-		DependencyMode:         c.DependencyMode,
-		DependencySource:       c.DependencySource,
-		TraceMode:              c.TraceMode,
+		ID:                              c.ID,
+		Engine:                          c.Engine,
+		Policy:                          c.Policy,
+		PolicyVersion:                   fixed.PresetVersion,
+		Executors:                       c.Executors,
+		MaxSpeculativeInflight:          c.MaxSpeculativeInflight,
+		DependencyMode:                  c.DependencyMode,
+		DependencySource:                c.DependencySource,
+		DependencyRepresentation:        c.DependencyRepresentation,
+		DependencyRepresentationBuilder: c.DependencyRepresentationBuilder,
+		TraceMode:                       c.TraceMode,
 	}
 }
 
@@ -189,9 +193,26 @@ func (c Config) validate() (time.Duration, error) {
 		if !control.ValidDependencySource(experimentCase.DependencySource) {
 			return invalid("case %q has invalid dependency_source %q", experimentCase.ID, experimentCase.DependencySource)
 		}
+		if !control.ValidDependencyRepresentation(experimentCase.DependencyRepresentation) {
+			return invalid("case %q has invalid dependency_representation %q", experimentCase.ID, experimentCase.DependencyRepresentation)
+		}
+		if !control.ValidDependencyRepresentationBuilder(experimentCase.DependencyRepresentationBuilder) {
+			return invalid("case %q has invalid dependency_representation_builder %q", experimentCase.ID, experimentCase.DependencyRepresentationBuilder)
+		}
+		if !validRepresentationBuilder(experimentCase.DependencyRepresentation, experimentCase.DependencyRepresentationBuilder) {
+			return invalid("case %q builder %q is invalid for representation %q", experimentCase.ID, experimentCase.DependencyRepresentationBuilder, experimentCase.DependencyRepresentation)
+		}
+		if experimentCase.DependencySource == control.DependencySourceRuntimeObserved &&
+			experimentCase.DependencyRepresentation != control.DependencyRepresentationVersionOnly {
+			return invalid("case %q static representation %q requires static_program information", experimentCase.ID, experimentCase.DependencyRepresentation)
+		}
 		if experimentCase.DependencyMode != control.DependencyMVCCRuntime &&
 			experimentCase.DependencySource != control.DependencySourceStaticProgram {
 			return invalid("case %q mode %q requires static_program information", experimentCase.ID, experimentCase.DependencyMode)
+		}
+		if experimentCase.DependencyMode != control.DependencyMVCCRuntime &&
+			experimentCase.DependencyRepresentation != legacyRepresentation(experimentCase.DependencyMode) {
+			return invalid("case %q legacy mode %q requires representation %q", experimentCase.ID, experimentCase.DependencyMode, legacyRepresentation(experimentCase.DependencyMode))
 		}
 		if !control.ValidTraceMode(experimentCase.TraceMode) {
 			return invalid("case %q has invalid trace_mode %q", experimentCase.ID, experimentCase.TraceMode)
@@ -207,7 +228,9 @@ func (c Config) validate() (time.Duration, error) {
 		}
 		if experimentCase.Engine == "serial" &&
 			(experimentCase.DependencyMode != control.DependencyMVCCRuntime ||
-				experimentCase.DependencySource != control.DependencySourceRuntimeObserved) {
+				experimentCase.DependencySource != control.DependencySourceRuntimeObserved ||
+				experimentCase.DependencyRepresentation != control.DependencyRepresentationVersionOnly ||
+				experimentCase.DependencyRepresentationBuilder != control.DependencyRepresentationBuilderNone) {
 			return invalid("serial case %q must use mvcc_runtime/runtime_observed dependency control", experimentCase.ID)
 		}
 		caseIDs[experimentCase.ID] = experimentCase
@@ -234,7 +257,9 @@ func (c Config) validate() (time.Duration, error) {
 		}
 		if off.Engine != instrumented.Engine || off.Policy != instrumented.Policy || off.Executors != instrumented.Executors ||
 			off.MaxSpeculativeInflight != instrumented.MaxSpeculativeInflight ||
-			off.DependencyMode != instrumented.DependencyMode || off.DependencySource != instrumented.DependencySource {
+			off.DependencyMode != instrumented.DependencyMode || off.DependencySource != instrumented.DependencySource ||
+			off.DependencyRepresentation != instrumented.DependencyRepresentation ||
+			off.DependencyRepresentationBuilder != instrumented.DependencyRepresentationBuilder {
 			return invalid("telemetry ablation cases may differ only by trace mode and id")
 		}
 		for _, platform := range c.TelemetryAblation.EnforcePlatforms {
@@ -244,6 +269,36 @@ func (c Config) validate() (time.Duration, error) {
 		}
 	}
 	return timeout, nil
+}
+
+func validRepresentationBuilder(
+	representation control.DependencyRepresentation,
+	builder control.DependencyRepresentationBuilder,
+) bool {
+	switch representation {
+	case control.DependencyRepresentationVersionOnly:
+		return builder == control.DependencyRepresentationBuilderNone
+	case control.DependencyRepresentationRAWLastWriter, control.DependencyRepresentationMaxRAWPredecessor:
+		return builder == control.DependencyRepresentationBuilderIndexedByKey
+	case control.DependencyRepresentationFullConflictGraph:
+		return builder == control.DependencyRepresentationBuilderIndexedByKey ||
+			builder == control.DependencyRepresentationBuilderQuadraticReference
+	default:
+		return false
+	}
+}
+
+func legacyRepresentation(mode control.DependencyMode) control.DependencyRepresentation {
+	switch mode {
+	case control.DependencyDeclaredDAG:
+		return control.DependencyRepresentationRAWLastWriter
+	case control.DependencySummary:
+		return control.DependencyRepresentationMaxRAWPredecessor
+	case control.DependencyFullGraph:
+		return control.DependencyRepresentationFullConflictGraph
+	default:
+		return control.DependencyRepresentationVersionOnly
+	}
 }
 
 func decodeStrict(encoded []byte, target any) error {

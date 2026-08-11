@@ -29,36 +29,118 @@ type RunConfig struct {
 	// MaxSpeculativeInflight bounds admitted transactions beyond the stable
 	// validated frontier. Zero means the full block window (W).
 	MaxSpeculativeInflight int
-	// DependencyMode and DependencySource independently record the legacy
-	// representation/use and acquisition choices. Their zero values preserve
-	// the runtime-MVCC baseline for direct engine callers.
-	DependencyMode   control.DependencyMode
-	DependencySource control.DependencySource
-	OmitResultDigest bool
+	// DependencyMode retains the legacy consumer bundle. Source,
+	// Representation, and RepresentationBuilder are explicit pipeline stages.
+	// Zero values preserve the runtime-MVCC baseline for direct engine callers.
+	DependencyMode                  control.DependencyMode
+	DependencySource                control.DependencySource
+	DependencyRepresentation        control.DependencyRepresentation
+	DependencyRepresentationBuilder control.DependencyRepresentationBuilder
+	OmitResultDigest                bool
 }
 
-func EffectiveDependencyControl(config RunConfig) (control.DependencyMode, control.DependencySource, error) {
+type DependencyPlan struct {
+	Mode                  control.DependencyMode
+	Source                control.DependencySource
+	Representation        control.DependencyRepresentation
+	RepresentationBuilder control.DependencyRepresentationBuilder
+}
+
+func EffectiveDependencyControl(config RunConfig) (DependencyPlan, error) {
 	mode := config.DependencyMode
 	if mode == "" {
 		mode = control.DependencyMVCCRuntime
 	}
 	if !control.ValidDependencyMode(mode) {
-		return "", "", fmt.Errorf("%w: unknown mode %q", ErrInvalidDependencyMode, mode)
+		return DependencyPlan{}, fmt.Errorf("%w: unknown mode %q", ErrInvalidDependencyMode, mode)
 	}
 	source := config.DependencySource
 	if source == "" {
 		if mode != control.DependencyMVCCRuntime {
-			return "", "", fmt.Errorf("%w: mode %q requires explicit information source", ErrInvalidDependencyMode, mode)
+			return DependencyPlan{}, fmt.Errorf("%w: mode %q requires explicit information source", ErrInvalidDependencyMode, mode)
 		}
 		source = control.DependencySourceRuntimeObserved
 	}
 	if !control.ValidDependencySource(source) {
-		return "", "", fmt.Errorf("%w: unknown information source %q", ErrInvalidDependencyMode, source)
+		return DependencyPlan{}, fmt.Errorf("%w: unknown information source %q", ErrInvalidDependencyMode, source)
 	}
 	if mode != control.DependencyMVCCRuntime && source != control.DependencySourceStaticProgram {
-		return "", "", fmt.Errorf("%w: mode %q requires %q information", ErrInvalidDependencyMode, mode, control.DependencySourceStaticProgram)
+		return DependencyPlan{}, fmt.Errorf("%w: mode %q requires %q information", ErrInvalidDependencyMode, mode, control.DependencySourceStaticProgram)
 	}
-	return mode, source, nil
+
+	representation := config.DependencyRepresentation
+	if representation == "" {
+		representation = legacyRepresentation(mode)
+	}
+	if !control.ValidDependencyRepresentation(representation) {
+		return DependencyPlan{}, fmt.Errorf("%w: unknown representation %q", ErrInvalidDependencyMode, representation)
+	}
+	builder := config.DependencyRepresentationBuilder
+	if builder == "" {
+		builder = defaultRepresentationBuilder(representation)
+	}
+	if !control.ValidDependencyRepresentationBuilder(builder) {
+		return DependencyPlan{}, fmt.Errorf("%w: unknown representation builder %q", ErrInvalidDependencyMode, builder)
+	}
+	if err := validateRepresentationBuilder(representation, builder); err != nil {
+		return DependencyPlan{}, err
+	}
+	if source == control.DependencySourceRuntimeObserved && representation != control.DependencyRepresentationVersionOnly {
+		return DependencyPlan{}, fmt.Errorf("%w: representation %q requires static_program information", ErrInvalidDependencyMode, representation)
+	}
+	if mode != control.DependencyMVCCRuntime && representation != legacyRepresentation(mode) {
+		return DependencyPlan{}, fmt.Errorf("%w: legacy mode %q requires representation %q", ErrInvalidDependencyMode, mode, legacyRepresentation(mode))
+	}
+	return DependencyPlan{
+		Mode:                  mode,
+		Source:                source,
+		Representation:        representation,
+		RepresentationBuilder: builder,
+	}, nil
+}
+
+func legacyRepresentation(mode control.DependencyMode) control.DependencyRepresentation {
+	switch mode {
+	case control.DependencyDeclaredDAG:
+		return control.DependencyRepresentationRAWLastWriter
+	case control.DependencySummary:
+		return control.DependencyRepresentationMaxRAWPredecessor
+	case control.DependencyFullGraph:
+		return control.DependencyRepresentationFullConflictGraph
+	default:
+		return control.DependencyRepresentationVersionOnly
+	}
+}
+
+func defaultRepresentationBuilder(representation control.DependencyRepresentation) control.DependencyRepresentationBuilder {
+	switch representation {
+	case control.DependencyRepresentationVersionOnly:
+		return control.DependencyRepresentationBuilderNone
+	case control.DependencyRepresentationFullConflictGraph:
+		return control.DependencyRepresentationBuilderQuadraticReference
+	default:
+		return control.DependencyRepresentationBuilderIndexedByKey
+	}
+}
+
+func validateRepresentationBuilder(
+	representation control.DependencyRepresentation,
+	builder control.DependencyRepresentationBuilder,
+) error {
+	valid := false
+	switch representation {
+	case control.DependencyRepresentationVersionOnly:
+		valid = builder == control.DependencyRepresentationBuilderNone
+	case control.DependencyRepresentationRAWLastWriter, control.DependencyRepresentationMaxRAWPredecessor:
+		valid = builder == control.DependencyRepresentationBuilderIndexedByKey
+	case control.DependencyRepresentationFullConflictGraph:
+		valid = builder == control.DependencyRepresentationBuilderIndexedByKey ||
+			builder == control.DependencyRepresentationBuilderQuadraticReference
+	}
+	if !valid {
+		return fmt.Errorf("%w: builder %q is invalid for representation %q", ErrInvalidDependencyMode, builder, representation)
+	}
+	return nil
 }
 
 func EffectiveTraceMode(config RunConfig) (control.TraceMode, error) {

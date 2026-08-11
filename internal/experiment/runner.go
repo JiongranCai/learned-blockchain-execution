@@ -13,7 +13,7 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/workload"
 )
 
-const ValidationBundleSchemaVersion = "validation-bundle-v4"
+const ValidationBundleSchemaVersion = "validation-bundle-v5"
 
 var (
 	ErrInvalidValidationBundle = errors.New("invalid validation bundle")
@@ -21,13 +21,15 @@ var (
 )
 
 type ValidatedCase struct {
-	ID                     string                   `json:"id"`
-	Engine                 string                   `json:"engine"`
-	Policy                 string                   `json:"policy"`
-	Executors              int                      `json:"executors"`
-	MaxSpeculativeInflight int                      `json:"max_speculative_inflight"`
-	DependencyMode         control.DependencyMode   `json:"dependency_mode"`
-	DependencySource       control.DependencySource `json:"dependency_source"`
+	ID                              string                                  `json:"id"`
+	Engine                          string                                  `json:"engine"`
+	Policy                          string                                  `json:"policy"`
+	Executors                       int                                     `json:"executors"`
+	MaxSpeculativeInflight          int                                     `json:"max_speculative_inflight"`
+	DependencyMode                  control.DependencyMode                  `json:"dependency_mode"`
+	DependencySource                control.DependencySource                `json:"dependency_source"`
+	DependencyRepresentation        control.DependencyRepresentation        `json:"dependency_representation"`
+	DependencyRepresentationBuilder control.DependencyRepresentationBuilder `json:"dependency_representation_builder"`
 }
 
 type ValidationBundle struct {
@@ -73,13 +75,15 @@ func Validate(ctx context.Context, loaded LoadedConfig) (ValidationBundle, error
 		return ValidationBundle{}, err
 	}
 	oracleCase := CaseConfig{
-		ID:               "serial-oracle",
-		Engine:           "serial",
-		Policy:           "serial_preset",
-		Executors:        1,
-		DependencyMode:   control.DependencyMVCCRuntime,
-		DependencySource: control.DependencySourceRuntimeObserved,
-		TraceMode:        control.TraceOff,
+		ID:                              "serial-oracle",
+		Engine:                          "serial",
+		Policy:                          "serial_preset",
+		Executors:                       1,
+		DependencyMode:                  control.DependencyMVCCRuntime,
+		DependencySource:                control.DependencySourceRuntimeObserved,
+		DependencyRepresentation:        control.DependencyRepresentationVersionOnly,
+		DependencyRepresentationBuilder: control.DependencyRepresentationBuilderNone,
+		TraceMode:                       control.TraceOff,
 	}
 	oracleContext, cancel := context.WithTimeout(ctx, loaded.Timeout)
 	oracle, err := Execute(oracleContext, artifact, oracleCase, false)
@@ -126,13 +130,15 @@ func Validate(ctx context.Context, loaded LoadedConfig) (ValidationBundle, error
 		}
 		if match {
 			validated = append(validated, ValidatedCase{
-				ID:                     experimentCase.ID,
-				Engine:                 experimentCase.Engine,
-				Policy:                 experimentCase.Policy,
-				Executors:              experimentCase.Executors,
-				MaxSpeculativeInflight: experimentCase.MaxSpeculativeInflight,
-				DependencyMode:         experimentCase.DependencyMode,
-				DependencySource:       experimentCase.DependencySource,
+				ID:                              experimentCase.ID,
+				Engine:                          experimentCase.Engine,
+				Policy:                          experimentCase.Policy,
+				Executors:                       experimentCase.Executors,
+				MaxSpeculativeInflight:          experimentCase.MaxSpeculativeInflight,
+				DependencyMode:                  experimentCase.DependencyMode,
+				DependencySource:                experimentCase.DependencySource,
+				DependencyRepresentation:        experimentCase.DependencyRepresentation,
+				DependencyRepresentationBuilder: experimentCase.DependencyRepresentationBuilder,
 			})
 		}
 	}
@@ -430,7 +436,9 @@ func bundleHasCase(bundle ValidationBundle, experimentCase CaseConfig) bool {
 			candidate.Policy == experimentCase.Policy && candidate.Executors == experimentCase.Executors &&
 			candidate.MaxSpeculativeInflight == experimentCase.MaxSpeculativeInflight &&
 			candidate.DependencyMode == experimentCase.DependencyMode &&
-			candidate.DependencySource == experimentCase.DependencySource {
+			candidate.DependencySource == experimentCase.DependencySource &&
+			candidate.DependencyRepresentation == experimentCase.DependencyRepresentation &&
+			candidate.DependencyRepresentationBuilder == experimentCase.DependencyRepresentationBuilder {
 			return true
 		}
 	}

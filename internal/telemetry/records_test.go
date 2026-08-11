@@ -34,6 +34,8 @@ func TestCollectMetricsUsesCanonicalResultsAndTraceCounters(t *testing.T) {
 			Dependency: control.DependencyCounters{
 				Mode:                         control.DependencySummary,
 				Source:                       control.DependencySourceStaticProgram,
+				Representation:               control.DependencyRepresentationMaxRAWPredecessor,
+				RepresentationBuilder:        control.DependencyRepresentationBuilderIndexedByKey,
 				SourceAvailableAt:            control.DependencyAvailableBeforeExecution,
 				SourceVersion:                control.DependencySourceVersionStaticScan,
 				AcquisitionDisposition:       control.DependencyDispositionRepresentation,
@@ -43,7 +45,10 @@ func TestCollectMetricsUsesCanonicalResultsAndTraceCounters(t *testing.T) {
 				AcquisitionNS:                5,
 				RepresentationMeasured:       true,
 				RepresentationNS:             7,
+				RepresentationBuildUnits:     4,
 				RepresentationLogicalBytes:   16,
+				RepresentationEntries:        2,
+				RepresentationMaxFanIn:       1,
 				SummaryEntries:               2,
 				EstimatedWriteLocations:      2,
 				EstimatedWriteKeyBytes:       4,
@@ -83,7 +88,10 @@ func TestCollectMetricsUsesCanonicalResultsAndTraceCounters(t *testing.T) {
 	}
 	if metrics.Dependency.Mode != control.DependencySummary ||
 		metrics.Dependency.Source != control.DependencySourceStaticProgram ||
+		metrics.Dependency.Representation != control.DependencyRepresentationMaxRAWPredecessor ||
+		metrics.Dependency.RepresentationBuilder != control.DependencyRepresentationBuilderIndexedByKey ||
 		metrics.Dependency.AcquisitionNS != 5 || metrics.Dependency.RepresentationNS != 7 ||
+		metrics.Dependency.RepresentationBuildUnits != 4 || metrics.Dependency.RepresentationEntries != 2 ||
 		metrics.Dependency.ResolutionNS != 11 || metrics.Dependency.TraversalSteps != 3 ||
 		metrics.Dependency.PostGuidanceReexecutionUnits != 4 {
 		t.Fatalf("unexpected dependency metrics: %#v", metrics.Dependency)

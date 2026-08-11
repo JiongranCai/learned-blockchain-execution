@@ -1,6 +1,6 @@
 # Experiment configuration contracts
 
-`experiment-matrix-v4` is the only input contract accepted by `bench validate` and `bench run`. Parsing rejects unknown fields, duplicate case identifiers, unsupported engines or policies, invalid trace modes, ambiguous workload sources, unfrozen workload hashes, implicit environment controls, negative speculation limits, invalid serial controls, illegal dependency mode/source pairs, and formal configurations with placeholder affinity, NUMA, or page-cache values.
+`experiment-matrix-v5` is the only input contract accepted by `bench validate` and `bench run`. Parsing rejects unknown fields, duplicate case identifiers, unsupported engines or policies, invalid trace modes, ambiguous workload sources, unfrozen workload hashes, implicit environment controls, negative speculation limits, invalid serial controls, illegal dependency source/representation/builder combinations, and formal configurations with placeholder affinity, NUMA, or page-cache values.
 
 ## Execution controls
 
@@ -20,12 +20,16 @@ compute-time skew from access skew.
 correlation independently of hot-set selection. Zero preserves independent
 sampling; one models a read-modify-write against the same selected key.
 
-Dependency acquisition and dependency use are represented by separate fields so information cost cannot be hidden inside a mechanism label:
+Dependency acquisition, representation, and legacy scheduling use are represented by separate fields so one stage's cost cannot be hidden inside a mechanism label:
 
 - `dependency_source ∈ {runtime_observed, static_program}` selects acquisition. `static_program` scans only engine-visible transaction programs inside the timed interval and never reads workload ground truth.
-- `dependency_mode ∈ {mvcc_runtime, declared_dag, summary, full_graph}` selects representation and scheduling use. Every guided mode requires `static_program`. The `mvcc_runtime/static_program` pair is an equal-information version-only ablation: it pays for the same scan but deliberately discards the static access sets.
+- `dependency_representation ∈ {version_only, raw_last_writer, max_raw_predecessor, full_conflict_graph}` selects the materialized structure without selecting a consumer.
+- `dependency_representation_builder ∈ {none, indexed_by_key, quadratic_reference}` records how the structure is built. `version_only` requires `none`; RAW/summary representations use `indexed_by_key`; a full graph permits either the diagnostic quadratic reference or the correctness-equivalent key-indexed builder.
+- `dependency_mode ∈ {mvcc_runtime, declared_dag, summary, full_graph}` is retained for the legacy consumer bundles. New CQ3-R cases fix it to `mvcc_runtime`, so the static representation is built and discarded while runtime MVCC remains the only execution path. Legacy guided modes require the matching representation and `static_program` source.
 
 CQ3-I telemetry records when the source becomes available, its implementation version, whether the artifact enters the runtime kernel, is discarded, or feeds a representation, and the existing completeness/exactness and acquisition cost counters. No content hash is computed for the transient information artifact.
+
+CQ3-R telemetry records representation kind and builder, build time and deterministic work units, entries/edges, maximum fan-in, logical bytes, and process RSS. Write-estimate build time is recorded separately for legacy bundles. A representation-only case must report `representation_built_then_discarded` and zero plan lookups, resolution, estimate payload, and dependency waits.
 
 Static program accesses are conservative syntactic sets. The current flat runtime gives complete coverage of every named state access, but branches, failures, gas exhaustion, or state errors can make the executed set smaller. Extra keys can delay work, while missing guidance is repaired by Block-STM validation and deterministic reexecution.
 
@@ -58,6 +62,8 @@ Smoke matrices may use fewer rounds, but their records remain pilot evidence and
 `experiments/speculation-window/` freezes `P=8` and compares the distinct effective admission choices `1/P/4P/W`. The anchor matrices contrast expensive low-conflict work with a cheap single-key hotspot chain. Boundary matrices keep the seed, transaction count, compute distribution, workers, and all other controls fixed while changing only `key_space` from 1 through 3. The hotspot/cold-tail matrix keeps `key_space=8192` while concentrating accesses on a small hot head and explicitly controlling read/write correlation.
 
 `experiments/dependency-acquisition/` is the isolated CQ3-I family. Its two smoke anchors and Linux formal template keep `P=8`, `L=W`, `dependency_mode=mvcc_runtime`, runtime validation/reexecution, and all representation consumers fixed. Only `dependency_source` changes between `runtime_observed` and `static_program`; the latter must report `discarded_after_acquisition`, zero representation time, and zero plan lookups.
+
+`experiments/dependency-representation/` is the isolated CQ3-R family. It fixes `dependency_source=static_program`, `dependency_mode=mvcc_runtime`, `P=8`, and `L=W`, then compares version-only, RAW last-writer, max-RAW predecessor, and the two full-conflict-graph builders. Both smoke anchors use 1 warmup and 5 measurement rounds for local feasibility only. The Linux template uses the formal 3/30 protocol and intentionally rejects placeholder host controls until instantiated on the target machine.
 
 `experiments/dependency-guidance/` contains three comparison families:
 

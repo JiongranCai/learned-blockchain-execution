@@ -16,14 +16,20 @@ import (
 
 func TestDependencyModesMatchSerialAcrossSeedsLimitsAndWorkers(t *testing.T) {
 	controls := []struct {
-		mode        control.DependencyMode
-		information control.DependencySource
+		mode           control.DependencyMode
+		information    control.DependencySource
+		representation control.DependencyRepresentation
+		builder        control.DependencyRepresentationBuilder
 	}{
-		{control.DependencyMVCCRuntime, control.DependencySourceRuntimeObserved},
-		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram},
-		{control.DependencyDeclaredDAG, control.DependencySourceStaticProgram},
-		{control.DependencySummary, control.DependencySourceStaticProgram},
-		{control.DependencyFullGraph, control.DependencySourceStaticProgram},
+		{control.DependencyMVCCRuntime, control.DependencySourceRuntimeObserved, control.DependencyRepresentationVersionOnly, control.DependencyRepresentationBuilderNone},
+		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationVersionOnly, control.DependencyRepresentationBuilderNone},
+		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationRAWLastWriter, control.DependencyRepresentationBuilderIndexedByKey},
+		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationMaxRAWPredecessor, control.DependencyRepresentationBuilderIndexedByKey},
+		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationFullConflictGraph, control.DependencyRepresentationBuilderQuadraticReference},
+		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationFullConflictGraph, control.DependencyRepresentationBuilderIndexedByKey},
+		{control.DependencyDeclaredDAG, control.DependencySourceStaticProgram, control.DependencyRepresentationRAWLastWriter, control.DependencyRepresentationBuilderIndexedByKey},
+		{control.DependencySummary, control.DependencySourceStaticProgram, control.DependencyRepresentationMaxRAWPredecessor, control.DependencyRepresentationBuilderIndexedByKey},
+		{control.DependencyFullGraph, control.DependencySourceStaticProgram, control.DependencyRepresentationFullConflictGraph, control.DependencyRepresentationBuilderQuadraticReference},
 	}
 	for _, shape := range []struct {
 		name  string
@@ -47,7 +53,7 @@ func TestDependencyModesMatchSerialAcrossSeedsLimitsAndWorkers(t *testing.T) {
 			for _, workers := range []int{1, 4} {
 				for _, limit := range []int{0, 3} {
 					for _, dependency := range controls {
-						name := fmt.Sprintf("%s/seed-%d/workers-%d/L-%d/%s/%s", shape.name, seed, workers, limit, dependency.mode, dependency.information)
+						name := fmt.Sprintf("%s/seed-%d/workers-%d/L-%d/%s/%s/%s/%s", shape.name, seed, workers, limit, dependency.mode, dependency.information, dependency.representation, dependency.builder)
 						t.Run(name, func(t *testing.T) {
 							serialState, err := artifact.NewState()
 							if err != nil {
@@ -68,10 +74,12 @@ func TestDependencyModesMatchSerialAcrossSeedsLimitsAndWorkers(t *testing.T) {
 								got, _, err := blockstm.New(nil).ExecuteBlock(
 									context.Background(), block, candidateState,
 									engineapi.RunConfig{
-										Executors:              workers,
-										MaxSpeculativeInflight: limit,
-										DependencyMode:         dependency.mode,
-										DependencySource:       dependency.information,
+										Executors:                       workers,
+										MaxSpeculativeInflight:          limit,
+										DependencyMode:                  dependency.mode,
+										DependencySource:                dependency.information,
+										DependencyRepresentation:        dependency.representation,
+										DependencyRepresentationBuilder: dependency.builder,
 									},
 								)
 								if err != nil {
@@ -111,17 +119,20 @@ func TestDependencyTelemetrySeparatesAcquisitionRepresentationAndUse(t *testing.
 		name               string
 		mode               control.DependencyMode
 		information        control.DependencySource
+		representation     control.DependencyRepresentation
+		builder            control.DependencyRepresentationBuilder
 		wantAcquisition    bool
 		wantRepresentation bool
 		wantEdges          bool
 		wantSummary        bool
 		wantEstimates      bool
 	}{
-		{"runtime", control.DependencyMVCCRuntime, control.DependencySourceRuntimeObserved, false, false, false, false, false},
-		{"equalized-version-only", control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, true, false, false, false, false},
-		{"declared-dag", control.DependencyDeclaredDAG, control.DependencySourceStaticProgram, true, true, true, false, true},
-		{"summary", control.DependencySummary, control.DependencySourceStaticProgram, true, true, false, true, true},
-		{"full-graph", control.DependencyFullGraph, control.DependencySourceStaticProgram, true, true, true, false, true},
+		{"runtime", control.DependencyMVCCRuntime, control.DependencySourceRuntimeObserved, control.DependencyRepresentationVersionOnly, control.DependencyRepresentationBuilderNone, false, false, false, false, false},
+		{"equalized-version-only", control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationVersionOnly, control.DependencyRepresentationBuilderNone, true, false, false, false, false},
+		{"representation-only-full-indexed", control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationFullConflictGraph, control.DependencyRepresentationBuilderIndexedByKey, true, true, true, false, false},
+		{"declared-dag", control.DependencyDeclaredDAG, control.DependencySourceStaticProgram, control.DependencyRepresentationRAWLastWriter, control.DependencyRepresentationBuilderIndexedByKey, true, true, true, false, true},
+		{"summary", control.DependencySummary, control.DependencySourceStaticProgram, control.DependencyRepresentationMaxRAWPredecessor, control.DependencyRepresentationBuilderIndexedByKey, true, true, false, true, true},
+		{"full-graph", control.DependencyFullGraph, control.DependencySourceStaticProgram, control.DependencyRepresentationFullConflictGraph, control.DependencyRepresentationBuilderQuadraticReference, true, true, true, false, true},
 	}
 
 	for _, testCase := range testCases {
@@ -133,17 +144,21 @@ func TestDependencyTelemetrySeparatesAcquisitionRepresentationAndUse(t *testing.
 			_, trace, err := blockstm.New(nil).ExecuteBlock(
 				context.Background(), block, storage,
 				engineapi.RunConfig{
-					Executors:        8,
-					DependencyMode:   testCase.mode,
-					DependencySource: testCase.information,
-					TraceMode:        control.TraceCounters,
+					Executors:                       8,
+					DependencyMode:                  testCase.mode,
+					DependencySource:                testCase.information,
+					DependencyRepresentation:        testCase.representation,
+					DependencyRepresentationBuilder: testCase.builder,
+					TraceMode:                       control.TraceCounters,
 				},
 			)
 			if err != nil {
 				t.Fatal(err)
 			}
 			dependency := trace.Work.Dependency
-			if dependency.Mode != testCase.mode || dependency.Source != testCase.information || !dependency.InformationComplete {
+			if dependency.Mode != testCase.mode || dependency.Source != testCase.information ||
+				dependency.Representation != testCase.representation || dependency.RepresentationBuilder != testCase.builder ||
+				!dependency.InformationComplete {
 				t.Fatalf("identity/completeness mismatch: %#v", dependency)
 			}
 			if dependency.InformationExact != (testCase.information == control.DependencySourceRuntimeObserved) {
@@ -165,8 +180,15 @@ func TestDependencyTelemetrySeparatesAcquisitionRepresentationAndUse(t *testing.
 				t.Fatalf("static acquisition was not charged: %#v", dependency)
 			}
 			if testCase.wantRepresentation && (dependency.RepresentationLogicalBytes == 0 ||
-				dependency.PlanLookups < uint64(len(block.Transactions)) || dependency.TraversalSteps == 0 || dependency.ResolutionNS == 0) {
+				dependency.RepresentationBuildUnits == 0) {
 				t.Fatalf("representation/use was not charged: %#v", dependency)
+			}
+			if testCase.wantEstimates && (dependency.PlanLookups < uint64(len(block.Transactions)) ||
+				dependency.TraversalSteps == 0 || dependency.ResolutionNS == 0 || dependency.EstimateBuildNS == 0) {
+				t.Fatalf("static consumer was not charged: %#v", dependency)
+			}
+			if !testCase.wantEstimates && (dependency.PlanLookups != 0 || dependency.ResolutionMeasured || dependency.EstimateBuildNS != 0) {
+				t.Fatalf("representation-only case reached a consumer: %#v", dependency)
 			}
 		})
 	}
@@ -184,6 +206,8 @@ func TestEngineRejectsIllegalDependencyControls(t *testing.T) {
 		{Executors: 1, DependencyMode: control.DependencySummary},
 		{Executors: 1, DependencyMode: control.DependencySummary, DependencySource: control.DependencySourceRuntimeObserved},
 		{Executors: 1, DependencyMode: control.DependencyMode("unknown"), DependencySource: control.DependencySourceStaticProgram},
+		{Executors: 1, DependencyMode: control.DependencyMVCCRuntime, DependencySource: control.DependencySourceStaticProgram, DependencyRepresentation: control.DependencyRepresentationRAWLastWriter, DependencyRepresentationBuilder: control.DependencyRepresentationBuilderNone},
+		{Executors: 1, DependencyMode: control.DependencySummary, DependencySource: control.DependencySourceStaticProgram, DependencyRepresentation: control.DependencyRepresentationFullConflictGraph, DependencyRepresentationBuilder: control.DependencyRepresentationBuilderIndexedByKey},
 	} {
 		storage, stateErr := artifact.NewState()
 		if stateErr != nil {

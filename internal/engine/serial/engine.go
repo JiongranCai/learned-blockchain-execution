@@ -65,11 +65,14 @@ func (e *Engine) ExecuteBlock(
 	if config.MaxSpeculativeInflight < 0 || config.MaxSpeculativeInflight > 1 {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, engineapi.ErrInvalidSpeculationLimit
 	}
-	dependencyMode, dependencySource, err := engineapi.EffectiveDependencyControl(config)
+	dependencyPlan, err := engineapi.EffectiveDependencyControl(config)
 	if err != nil {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, err
 	}
-	if dependencyMode != control.DependencyMVCCRuntime || dependencySource != control.DependencySourceRuntimeObserved {
+	if dependencyPlan.Mode != control.DependencyMVCCRuntime ||
+		dependencyPlan.Source != control.DependencySourceRuntimeObserved ||
+		dependencyPlan.Representation != control.DependencyRepresentationVersionOnly ||
+		dependencyPlan.RepresentationBuilder != control.DependencyRepresentationBuilderNone {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, engineapi.ErrInvalidDependencyMode
 	}
 	if err := ctx.Err(); err != nil {
@@ -184,6 +187,8 @@ func (e *Engine) ExecuteBlock(
 		finalTrace.Work.Dependency = control.DependencyCounters{
 			Mode:                   control.DependencyMVCCRuntime,
 			Source:                 control.DependencySourceRuntimeObserved,
+			Representation:         control.DependencyRepresentationVersionOnly,
+			RepresentationBuilder:  control.DependencyRepresentationBuilderNone,
 			SourceAvailableAt:      control.DependencyAvailableDuringExecution,
 			SourceVersion:          control.DependencySourceVersionRuntimeMVCC,
 			AcquisitionDisposition: control.DependencyDispositionRuntimeKernel,

@@ -9,6 +9,7 @@ import (
 
 	kernel "github.com/crypto-org-chain/go-block-stm"
 	"github.com/crypto-org-chain/go-block-stm/internal/control"
+	engineapi "github.com/crypto-org-chain/go-block-stm/internal/engine"
 	"github.com/crypto-org-chain/go-block-stm/internal/model"
 )
 
@@ -24,65 +25,61 @@ type dependencyPreparation struct {
 func prepareDependency(
 	ctx context.Context,
 	block model.Block,
-	mode control.DependencyMode,
-	source control.DependencySource,
+	plan engineapi.DependencyPlan,
 	storeIndex int,
 	capture bool,
 ) (dependencyPreparation, error) {
-	artifact, err := acquireDependencyInformation(ctx, block, source, capture)
+	artifact, err := acquireDependencyInformation(ctx, block, plan.Source, capture)
 	if err != nil {
 		return dependencyPreparation{}, err
 	}
-	preparation := dependencyPreparation{base: artifact.counters(mode)}
-	if source == control.DependencySourceRuntimeObserved {
+	preparation := dependencyPreparation{base: artifact.counters(plan)}
+	if plan.Source == control.DependencySourceRuntimeObserved {
 		preparation.base.AcquisitionDisposition = control.DependencyDispositionRuntimeKernel
 		return preparation, nil
 	}
 
-	// CQ3-I acquisition isolation: pay for the static scan, then deliberately
-	// discard the artifact. Runtime MVCC remains the only correctness path.
-	if mode == control.DependencyMVCCRuntime {
+	if plan.Representation == control.DependencyRepresentationVersionOnly {
 		preparation.base.AcquisitionDisposition = control.DependencyDispositionDiscarded
+		return preparation, nil
+	}
+
+	representationStarted := measuredStart(capture)
+	representation, err := buildDependencyRepresentation(ctx, artifact.staticAccesses, plan)
+	if err != nil {
+		return dependencyPreparation{}, err
+	}
+	preparation.base.RepresentationMeasured = capture
+	preparation.base.RepresentationNS = measuredElapsed(representationStarted)
+	preparation.base.RepresentationBuildUnits = representation.buildUnits
+	preparation.base.RepresentationLogicalBytes = representation.logicalBytes
+	preparation.base.RepresentationEntries = representation.entries
+	preparation.base.RepresentationMaxFanIn = representation.maxFanIn
+	preparation.base.DependencyEdges = representation.edges
+	preparation.base.SummaryEntries = representation.summaryEntries
+
+	// CQ3-R representation isolation: build the selected structure inside the
+	// timed interval, then discard it without a static execution consumer.
+	if plan.Mode == control.DependencyMVCCRuntime {
+		preparation.base.AcquisitionDisposition = control.DependencyDispositionRepresentationDiscarded
 		return preparation, nil
 	}
 	preparation.base.AcquisitionDisposition = control.DependencyDispositionRepresentation
 
-	representationStarted := measuredStart(capture)
 	var gate dependencyGate
-	switch mode {
-	case control.DependencyDeclaredDAG:
-		predecessors, edges, err := buildDeclaredRAWDAG(ctx, artifact.staticAccesses)
-		if err != nil {
-			return dependencyPreparation{}, err
-		}
-		gate = newExplicitDependencyGate(predecessors)
-		preparation.base.DependencyEdges = edges
-		preparation.base.RepresentationLogicalBytes = uint64(len(predecessors))*8 + edges*8
-	case control.DependencySummary:
-		barriers, entries, err := buildDependencySummary(ctx, artifact.staticAccesses)
-		if err != nil {
-			return dependencyPreparation{}, err
-		}
-		gate = newSummaryDependencyGate(barriers)
-		preparation.base.SummaryEntries = entries
-		preparation.base.RepresentationLogicalBytes = uint64(len(barriers)) * 8
-	case control.DependencyFullGraph:
-		predecessors, edges, err := buildFullConflictGraph(ctx, artifact.staticAccesses)
-		if err != nil {
-			return dependencyPreparation{}, err
-		}
-		gate = newExplicitDependencyGate(predecessors)
-		preparation.base.DependencyEdges = edges
-		preparation.base.RepresentationLogicalBytes = uint64(len(predecessors))*8 + edges*8
+	if len(representation.barriers) > 0 {
+		gate = newSummaryDependencyGate(representation.barriers)
+	} else {
+		gate = newExplicitDependencyGate(representation.predecessors)
 	}
+	estimateStarted := measuredStart(capture)
 	preparation.estimates, preparation.base.EstimatedWriteLocations, preparation.base.EstimatedWriteKeyBytes, err =
 		buildWriteEstimates(ctx, artifact.staticAccesses, storeIndex)
 	if err != nil {
 		return dependencyPreparation{}, err
 	}
+	preparation.base.EstimateBuildNS = measuredElapsed(estimateStarted)
 	preparation.controller = &dependencyController{gate: gate, capture: capture}
-	preparation.base.RepresentationMeasured = capture
-	preparation.base.RepresentationNS = measuredElapsed(representationStarted)
 	preparation.base.ResolutionMeasured = capture
 	return preparation, nil
 }
@@ -161,20 +158,22 @@ func acquireDependencyInformation(
 	}, nil
 }
 
-func (a dependencyInformationArtifact) counters(mode control.DependencyMode) control.DependencyCounters {
+func (a dependencyInformationArtifact) counters(plan engineapi.DependencyPlan) control.DependencyCounters {
 	return control.DependencyCounters{
-		Mode:                mode,
-		Source:              a.source,
-		SourceAvailableAt:   a.availableAt,
-		SourceVersion:       a.version,
-		InformationComplete: a.complete,
-		InformationExact:    a.exact,
-		AcquisitionMeasured: a.measured,
-		AcquisitionNS:       a.elapsedNS,
-		AcquisitionUnits:    a.units,
-		AcquisitionBytes:    a.bytes,
-		StaticReadKeys:      a.readKeys,
-		StaticWriteKeys:     a.writeKeys,
+		Mode:                  plan.Mode,
+		Source:                a.source,
+		Representation:        plan.Representation,
+		RepresentationBuilder: plan.RepresentationBuilder,
+		SourceAvailableAt:     a.availableAt,
+		SourceVersion:         a.version,
+		InformationComplete:   a.complete,
+		InformationExact:      a.exact,
+		AcquisitionMeasured:   a.measured,
+		AcquisitionNS:         a.elapsedNS,
+		AcquisitionUnits:      a.units,
+		AcquisitionBytes:      a.bytes,
+		StaticReadKeys:        a.readKeys,
+		StaticWriteKeys:       a.writeKeys,
 	}
 }
 
@@ -235,6 +234,98 @@ func sortedSet(values map[string]struct{}) []string {
 	return result
 }
 
+type dependencyRepresentationArtifact struct {
+	predecessors   [][]int
+	barriers       []int
+	edges          uint64
+	summaryEntries uint64
+	entries        uint64
+	maxFanIn       uint64
+	buildUnits     uint64
+	logicalBytes   uint64
+}
+
+func buildDependencyRepresentation(
+	ctx context.Context,
+	accesses []staticAccessSet,
+	plan engineapi.DependencyPlan,
+) (dependencyRepresentationArtifact, error) {
+	switch plan.Representation {
+	case control.DependencyRepresentationRAWLastWriter:
+		predecessors, edges, err := buildDeclaredRAWDAG(ctx, accesses)
+		if err != nil {
+			return dependencyRepresentationArtifact{}, err
+		}
+		return dependencyRepresentationArtifact{
+			predecessors: predecessors,
+			edges:        edges,
+			entries:      edges,
+			maxFanIn:     maximumFanIn(predecessors),
+			buildUnits:   staticAccessUnits(accesses),
+			logicalBytes: uint64(len(predecessors))*8 + edges*8,
+		}, nil
+	case control.DependencyRepresentationMaxRAWPredecessor:
+		barriers, entries, err := buildDependencySummary(ctx, accesses)
+		if err != nil {
+			return dependencyRepresentationArtifact{}, err
+		}
+		maxFanIn := uint64(0)
+		if entries > 0 {
+			maxFanIn = 1
+		}
+		return dependencyRepresentationArtifact{
+			barriers:       barriers,
+			summaryEntries: entries,
+			entries:        entries,
+			maxFanIn:       maxFanIn,
+			buildUnits:     staticAccessUnits(accesses),
+			logicalBytes:   uint64(len(barriers)) * 8,
+		}, nil
+	case control.DependencyRepresentationFullConflictGraph:
+		var predecessors [][]int
+		var edges uint64
+		var units uint64
+		var err error
+		if plan.RepresentationBuilder == control.DependencyRepresentationBuilderIndexedByKey {
+			predecessors, edges, units, err = buildFullConflictGraphIndexed(ctx, accesses)
+		} else {
+			predecessors, edges, err = buildFullConflictGraph(ctx, accesses)
+			units = uint64(len(accesses)*(len(accesses)-1)) / 2
+		}
+		if err != nil {
+			return dependencyRepresentationArtifact{}, err
+		}
+		return dependencyRepresentationArtifact{
+			predecessors: predecessors,
+			edges:        edges,
+			entries:      edges,
+			maxFanIn:     maximumFanIn(predecessors),
+			buildUnits:   units,
+			logicalBytes: uint64(len(predecessors))*8 + edges*8,
+		}, nil
+	default:
+		return dependencyRepresentationArtifact{}, nil
+	}
+}
+
+func staticAccessUnits(accesses []staticAccessSet) uint64 {
+	var units uint64
+	for _, access := range accesses {
+		units += uint64(len(access.reads) + len(access.writes))
+	}
+	return units
+}
+
+func maximumFanIn(predecessors [][]int) uint64 {
+	var maximum uint64
+	for _, values := range predecessors {
+		if uint64(len(values)) > maximum {
+			maximum = uint64(len(values))
+		}
+	}
+	return maximum
+}
+
 // buildDeclaredRAWDAG constructs the minimal direct read-after-write guidance
 // available from statically named accesses. Branches are conservatively
 // over-approximated because every syntactic access is included.
@@ -254,7 +345,9 @@ func buildDeclaredRAWDAG(ctx context.Context, accesses []staticAccessSet) ([][]i
 				seen[predecessor] = struct{}{}
 			}
 		}
-		predecessors[transaction] = sortedIndices(seen)
+		if len(seen) > 0 {
+			predecessors[transaction] = sortedIndices(seen)
+		}
 		edges += uint64(len(predecessors[transaction]))
 		for _, key := range access.writes {
 			lastWriter[key] = transaction
@@ -314,6 +407,54 @@ func buildFullConflictGraph(ctx context.Context, accesses []staticAccessSet) ([]
 		}
 	}
 	return predecessors, edges, nil
+}
+
+// buildFullConflictGraphIndexed constructs the same preset-order RAW/WAR/WAW
+// graph as the quadratic reference, but visits only prior readers and writers
+// of keys accessed by the current transaction.
+func buildFullConflictGraphIndexed(ctx context.Context, accesses []staticAccessSet) ([][]int, uint64, uint64, error) {
+	predecessors := make([][]int, len(accesses))
+	readers := make(map[string][]int)
+	writers := make(map[string][]int)
+	var edges uint64
+	var units uint64
+	for transaction, access := range accesses {
+		if transaction&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, 0, 0, err
+			}
+		}
+		seen := make(map[int]struct{})
+		for _, key := range access.reads {
+			priorWriters := writers[key]
+			units += 1 + uint64(len(priorWriters))
+			for _, predecessor := range priorWriters {
+				seen[predecessor] = struct{}{}
+			}
+		}
+		for _, key := range access.writes {
+			priorReaders := readers[key]
+			priorWriters := writers[key]
+			units += 1 + uint64(len(priorReaders)+len(priorWriters))
+			for _, predecessor := range priorReaders {
+				seen[predecessor] = struct{}{}
+			}
+			for _, predecessor := range priorWriters {
+				seen[predecessor] = struct{}{}
+			}
+		}
+		if len(seen) > 0 {
+			predecessors[transaction] = sortedIndices(seen)
+		}
+		edges += uint64(len(predecessors[transaction]))
+		for _, key := range access.reads {
+			readers[key] = append(readers[key], transaction)
+		}
+		for _, key := range access.writes {
+			writers[key] = append(writers[key], transaction)
+		}
+	}
+	return predecessors, edges, units, nil
 }
 
 func conflict(earlier, later staticAccessSet) bool {

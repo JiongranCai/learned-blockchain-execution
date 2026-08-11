@@ -10,22 +10,24 @@ import (
 )
 
 const (
-	BenchmarkRecordSchema  = "benchmark-run-v4"
-	ValidationRecordSchema = "validation-run-v4"
-	ActionTraceSchema      = "action-trace-v4"
+	BenchmarkRecordSchema  = "benchmark-run-v5"
+	ValidationRecordSchema = "validation-run-v5"
+	ActionTraceSchema      = "action-trace-v5"
 	AblationRecordSchema   = "telemetry-ablation-v1"
 )
 
 type Case struct {
-	ID                     string                   `json:"id"`
-	Engine                 string                   `json:"engine"`
-	Policy                 string                   `json:"policy"`
-	PolicyVersion          string                   `json:"policy_version"`
-	Executors              int                      `json:"executors"`
-	MaxSpeculativeInflight int                      `json:"max_speculative_inflight"`
-	DependencyMode         control.DependencyMode   `json:"dependency_mode"`
-	DependencySource       control.DependencySource `json:"dependency_source"`
-	TraceMode              control.TraceMode        `json:"trace_mode"`
+	ID                              string                                  `json:"id"`
+	Engine                          string                                  `json:"engine"`
+	Policy                          string                                  `json:"policy"`
+	PolicyVersion                   string                                  `json:"policy_version"`
+	Executors                       int                                     `json:"executors"`
+	MaxSpeculativeInflight          int                                     `json:"max_speculative_inflight"`
+	DependencyMode                  control.DependencyMode                  `json:"dependency_mode"`
+	DependencySource                control.DependencySource                `json:"dependency_source"`
+	DependencyRepresentation        control.DependencyRepresentation        `json:"dependency_representation"`
+	DependencyRepresentationBuilder control.DependencyRepresentationBuilder `json:"dependency_representation_builder"`
+	TraceMode                       control.TraceMode                       `json:"trace_mode"`
 }
 
 type Environment struct {
@@ -271,6 +273,8 @@ func mergeDependencyCounters(target *control.DependencyCounters, source control.
 	if !seen {
 		target.Mode = source.Mode
 		target.Source = source.Source
+		target.Representation = source.Representation
+		target.RepresentationBuilder = source.RepresentationBuilder
 		target.SourceAvailableAt = source.SourceAvailableAt
 		target.SourceVersion = source.SourceVersion
 		target.AcquisitionDisposition = source.AcquisitionDisposition
@@ -292,9 +296,15 @@ func mergeDependencyCounters(target *control.DependencyCounters, source control.
 	target.StaticReadKeys += source.StaticReadKeys
 	target.StaticWriteKeys += source.StaticWriteKeys
 	target.RepresentationNS += source.RepresentationNS
+	target.RepresentationBuildUnits += source.RepresentationBuildUnits
 	target.RepresentationLogicalBytes += source.RepresentationLogicalBytes
+	target.RepresentationEntries += source.RepresentationEntries
+	if source.RepresentationMaxFanIn > target.RepresentationMaxFanIn {
+		target.RepresentationMaxFanIn = source.RepresentationMaxFanIn
+	}
 	target.DependencyEdges += source.DependencyEdges
 	target.SummaryEntries += source.SummaryEntries
+	target.EstimateBuildNS += source.EstimateBuildNS
 	target.EstimatedWriteLocations += source.EstimatedWriteLocations
 	target.EstimatedWriteKeyBytes += source.EstimatedWriteKeyBytes
 	target.ResolutionNS += source.ResolutionNS
