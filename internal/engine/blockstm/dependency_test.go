@@ -199,6 +199,66 @@ func TestCQ3RRepresentationIsolation(t *testing.T) {
 	}
 }
 
+func TestCQ3UConsumersAreIndependent(t *testing.T) {
+	block := model.Block{ID: "cq3-u", Transactions: []model.Transaction{
+		dependencyTestTransaction("t0", model.Instruction{Op: model.OpWrite, Key: []byte("a")}),
+		dependencyTestTransaction("t1", model.Instruction{Op: model.OpRead, Key: []byte("a")}, model.Instruction{Op: model.OpWrite, Key: []byte("b")}),
+		dependencyTestTransaction("t2", model.Instruction{Op: model.OpRead, Key: []byte("b")}),
+	}}
+	testCases := []struct {
+		name           string
+		representation control.DependencyRepresentation
+		wait           control.DependencyWaitPolicy
+		estimates      control.DependencyEstimateInjection
+		wantGate       bool
+		wantEstimates  bool
+	}{
+		{"raw-none", control.DependencyRepresentationRAWLastWriter, control.DependencyWaitNone, control.DependencyEstimatesDisabled, false, false},
+		{"raw-direct-wait", control.DependencyRepresentationRAWLastWriter, control.DependencyWaitDirectPredecessors, control.DependencyEstimatesDisabled, true, false},
+		{"raw-estimates", control.DependencyRepresentationRAWLastWriter, control.DependencyWaitNone, control.DependencyEstimatesWrite, false, true},
+		{"summary-frontier-wait", control.DependencyRepresentationMaxRAWPredecessor, control.DependencyWaitContiguousFrontier, control.DependencyEstimatesDisabled, true, false},
+		{"full-all-wait", control.DependencyRepresentationFullConflictGraph, control.DependencyWaitAllPredecessors, control.DependencyEstimatesDisabled, true, false},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			builder := control.DependencyRepresentationBuilderIndexedByKey
+			plan, err := engineapi.EffectiveDependencyControl(engineapi.RunConfig{
+				DependencyMode:                  control.DependencyMVCCRuntime,
+				DependencySource:                control.DependencySourceStaticProgram,
+				DependencyRepresentation:        testCase.representation,
+				DependencyRepresentationBuilder: builder,
+				DependencyWaitPolicy:            testCase.wait,
+				DependencyEstimateInjection:     testCase.estimates,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			preparation, err := prepareDependency(context.Background(), block, plan, 0, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (preparation.controller != nil) != testCase.wantGate ||
+				(len(preparation.estimates) > 0) != testCase.wantEstimates {
+				t.Fatalf("consumer coupling mismatch: %#v", preparation)
+			}
+			counters := preparation.Counters(2, 17)
+			if counters.WaitPolicy != testCase.wait || counters.EstimateInjection != testCase.estimates {
+				t.Fatalf("consumer identity mismatch: %#v", counters)
+			}
+			if testCase.wantGate != counters.ResolutionMeasured ||
+				testCase.wantEstimates != (counters.EstimatedWriteLocations > 0) {
+				t.Fatalf("consumer telemetry mismatch: %#v", counters)
+			}
+			if preparation.consumerActive && (counters.PostGuidanceReexecutions != 2 || counters.PostGuidanceReexecutionUnits != 17) {
+				t.Fatalf("post-consumer work was not recorded: %#v", counters)
+			}
+			if !preparation.consumerActive && (counters.PostGuidanceReexecutions != 0 || counters.PostGuidanceReexecutionUnits != 0) {
+				t.Fatalf("consumer-free plan recorded post-consumer work: %#v", counters)
+			}
+		})
+	}
+}
+
 func TestIndexedFullConflictGraphMatchesQuadraticReference(t *testing.T) {
 	accesses := []staticAccessSet{
 		{reads: []string{"a"}, writes: []string{"b"}},
@@ -277,7 +337,14 @@ func dependencyTestPlan(
 	representation control.DependencyRepresentation,
 	builder control.DependencyRepresentationBuilder,
 ) engineapi.DependencyPlan {
-	return engineapi.DependencyPlan{
-		Mode: mode, Source: source, Representation: representation, RepresentationBuilder: builder,
+	plan, err := engineapi.EffectiveDependencyControl(engineapi.RunConfig{
+		DependencyMode:                  mode,
+		DependencySource:                source,
+		DependencyRepresentation:        representation,
+		DependencyRepresentationBuilder: builder,
+	})
+	if err != nil {
+		panic(err)
 	}
+	return plan
 }

@@ -13,7 +13,7 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/workload"
 )
 
-const ValidationBundleSchemaVersion = "validation-bundle-v5"
+const ValidationBundleSchemaVersion = "validation-bundle-v6"
 
 var (
 	ErrInvalidValidationBundle = errors.New("invalid validation bundle")
@@ -30,6 +30,8 @@ type ValidatedCase struct {
 	DependencySource                control.DependencySource                `json:"dependency_source"`
 	DependencyRepresentation        control.DependencyRepresentation        `json:"dependency_representation"`
 	DependencyRepresentationBuilder control.DependencyRepresentationBuilder `json:"dependency_representation_builder"`
+	DependencyWaitPolicy            control.DependencyWaitPolicy            `json:"dependency_wait_policy"`
+	DependencyEstimateInjection     control.DependencyEstimateInjection     `json:"dependency_estimate_injection"`
 }
 
 type ValidationBundle struct {
@@ -83,6 +85,8 @@ func Validate(ctx context.Context, loaded LoadedConfig) (ValidationBundle, error
 		DependencySource:                control.DependencySourceRuntimeObserved,
 		DependencyRepresentation:        control.DependencyRepresentationVersionOnly,
 		DependencyRepresentationBuilder: control.DependencyRepresentationBuilderNone,
+		DependencyWaitPolicy:            control.DependencyWaitNone,
+		DependencyEstimateInjection:     control.DependencyEstimatesDisabled,
 		TraceMode:                       control.TraceOff,
 	}
 	oracleContext, cancel := context.WithTimeout(ctx, loaded.Timeout)
@@ -139,6 +143,8 @@ func Validate(ctx context.Context, loaded LoadedConfig) (ValidationBundle, error
 				DependencySource:                experimentCase.DependencySource,
 				DependencyRepresentation:        experimentCase.DependencyRepresentation,
 				DependencyRepresentationBuilder: experimentCase.DependencyRepresentationBuilder,
+				DependencyWaitPolicy:            experimentCase.DependencyWaitPolicy,
+				DependencyEstimateInjection:     experimentCase.DependencyEstimateInjection,
 			})
 		}
 	}
@@ -438,7 +444,9 @@ func bundleHasCase(bundle ValidationBundle, experimentCase CaseConfig) bool {
 			candidate.DependencyMode == experimentCase.DependencyMode &&
 			candidate.DependencySource == experimentCase.DependencySource &&
 			candidate.DependencyRepresentation == experimentCase.DependencyRepresentation &&
-			candidate.DependencyRepresentationBuilder == experimentCase.DependencyRepresentationBuilder {
+			candidate.DependencyRepresentationBuilder == experimentCase.DependencyRepresentationBuilder &&
+			candidate.DependencyWaitPolicy == experimentCase.DependencyWaitPolicy &&
+			candidate.DependencyEstimateInjection == experimentCase.DependencyEstimateInjection {
 			return true
 		}
 	}

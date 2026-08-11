@@ -20,16 +20,20 @@ func TestDependencyModesMatchSerialAcrossSeedsLimitsAndWorkers(t *testing.T) {
 		information    control.DependencySource
 		representation control.DependencyRepresentation
 		builder        control.DependencyRepresentationBuilder
+		wait           control.DependencyWaitPolicy
+		estimates      control.DependencyEstimateInjection
 	}{
-		{control.DependencyMVCCRuntime, control.DependencySourceRuntimeObserved, control.DependencyRepresentationVersionOnly, control.DependencyRepresentationBuilderNone},
-		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationVersionOnly, control.DependencyRepresentationBuilderNone},
-		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationRAWLastWriter, control.DependencyRepresentationBuilderIndexedByKey},
-		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationMaxRAWPredecessor, control.DependencyRepresentationBuilderIndexedByKey},
-		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationFullConflictGraph, control.DependencyRepresentationBuilderQuadraticReference},
-		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationFullConflictGraph, control.DependencyRepresentationBuilderIndexedByKey},
-		{control.DependencyDeclaredDAG, control.DependencySourceStaticProgram, control.DependencyRepresentationRAWLastWriter, control.DependencyRepresentationBuilderIndexedByKey},
-		{control.DependencySummary, control.DependencySourceStaticProgram, control.DependencyRepresentationMaxRAWPredecessor, control.DependencyRepresentationBuilderIndexedByKey},
-		{control.DependencyFullGraph, control.DependencySourceStaticProgram, control.DependencyRepresentationFullConflictGraph, control.DependencyRepresentationBuilderQuadraticReference},
+		{control.DependencyMVCCRuntime, control.DependencySourceRuntimeObserved, control.DependencyRepresentationVersionOnly, control.DependencyRepresentationBuilderNone, control.DependencyWaitNone, control.DependencyEstimatesDisabled},
+		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationVersionOnly, control.DependencyRepresentationBuilderNone, control.DependencyWaitNone, control.DependencyEstimatesDisabled},
+		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationRAWLastWriter, control.DependencyRepresentationBuilderIndexedByKey, control.DependencyWaitNone, control.DependencyEstimatesDisabled},
+		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationRAWLastWriter, control.DependencyRepresentationBuilderIndexedByKey, control.DependencyWaitDirectPredecessors, control.DependencyEstimatesDisabled},
+		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationRAWLastWriter, control.DependencyRepresentationBuilderIndexedByKey, control.DependencyWaitNone, control.DependencyEstimatesWrite},
+		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationMaxRAWPredecessor, control.DependencyRepresentationBuilderIndexedByKey, control.DependencyWaitContiguousFrontier, control.DependencyEstimatesDisabled},
+		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationFullConflictGraph, control.DependencyRepresentationBuilderQuadraticReference, control.DependencyWaitNone, control.DependencyEstimatesDisabled},
+		{control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, control.DependencyRepresentationFullConflictGraph, control.DependencyRepresentationBuilderIndexedByKey, control.DependencyWaitAllPredecessors, control.DependencyEstimatesDisabled},
+		{control.DependencyDeclaredDAG, control.DependencySourceStaticProgram, control.DependencyRepresentationRAWLastWriter, control.DependencyRepresentationBuilderIndexedByKey, control.DependencyWaitDirectPredecessors, control.DependencyEstimatesWrite},
+		{control.DependencySummary, control.DependencySourceStaticProgram, control.DependencyRepresentationMaxRAWPredecessor, control.DependencyRepresentationBuilderIndexedByKey, control.DependencyWaitContiguousFrontier, control.DependencyEstimatesWrite},
+		{control.DependencyFullGraph, control.DependencySourceStaticProgram, control.DependencyRepresentationFullConflictGraph, control.DependencyRepresentationBuilderQuadraticReference, control.DependencyWaitAllPredecessors, control.DependencyEstimatesWrite},
 	}
 	for _, shape := range []struct {
 		name  string
@@ -53,7 +57,7 @@ func TestDependencyModesMatchSerialAcrossSeedsLimitsAndWorkers(t *testing.T) {
 			for _, workers := range []int{1, 4} {
 				for _, limit := range []int{0, 3} {
 					for _, dependency := range controls {
-						name := fmt.Sprintf("%s/seed-%d/workers-%d/L-%d/%s/%s/%s/%s", shape.name, seed, workers, limit, dependency.mode, dependency.information, dependency.representation, dependency.builder)
+						name := fmt.Sprintf("%s/seed-%d/workers-%d/L-%d/%s/%s/%s/%s/%s/%s", shape.name, seed, workers, limit, dependency.mode, dependency.information, dependency.representation, dependency.builder, dependency.wait, dependency.estimates)
 						t.Run(name, func(t *testing.T) {
 							serialState, err := artifact.NewState()
 							if err != nil {
@@ -80,6 +84,8 @@ func TestDependencyModesMatchSerialAcrossSeedsLimitsAndWorkers(t *testing.T) {
 										DependencySource:                dependency.information,
 										DependencyRepresentation:        dependency.representation,
 										DependencyRepresentationBuilder: dependency.builder,
+										DependencyWaitPolicy:            dependency.wait,
+										DependencyEstimateInjection:     dependency.estimates,
 									},
 								)
 								if err != nil {
@@ -208,6 +214,9 @@ func TestEngineRejectsIllegalDependencyControls(t *testing.T) {
 		{Executors: 1, DependencyMode: control.DependencyMode("unknown"), DependencySource: control.DependencySourceStaticProgram},
 		{Executors: 1, DependencyMode: control.DependencyMVCCRuntime, DependencySource: control.DependencySourceStaticProgram, DependencyRepresentation: control.DependencyRepresentationRAWLastWriter, DependencyRepresentationBuilder: control.DependencyRepresentationBuilderNone},
 		{Executors: 1, DependencyMode: control.DependencySummary, DependencySource: control.DependencySourceStaticProgram, DependencyRepresentation: control.DependencyRepresentationFullConflictGraph, DependencyRepresentationBuilder: control.DependencyRepresentationBuilderIndexedByKey},
+		{Executors: 1, DependencyMode: control.DependencyMVCCRuntime, DependencySource: control.DependencySourceStaticProgram, DependencyRepresentation: control.DependencyRepresentationRAWLastWriter, DependencyRepresentationBuilder: control.DependencyRepresentationBuilderIndexedByKey, DependencyWaitPolicy: control.DependencyWaitAllPredecessors, DependencyEstimateInjection: control.DependencyEstimatesDisabled},
+		{Executors: 1, DependencyMode: control.DependencyMVCCRuntime, DependencySource: control.DependencySourceRuntimeObserved, DependencyRepresentation: control.DependencyRepresentationVersionOnly, DependencyRepresentationBuilder: control.DependencyRepresentationBuilderNone, DependencyWaitPolicy: control.DependencyWaitNone, DependencyEstimateInjection: control.DependencyEstimatesWrite},
+		{Executors: 1, DependencyMode: control.DependencyDeclaredDAG, DependencySource: control.DependencySourceStaticProgram, DependencyRepresentation: control.DependencyRepresentationRAWLastWriter, DependencyRepresentationBuilder: control.DependencyRepresentationBuilderIndexedByKey, DependencyWaitPolicy: control.DependencyWaitDirectPredecessors, DependencyEstimateInjection: control.DependencyEstimatesDisabled},
 	} {
 		storage, stateErr := artifact.NewState()
 		if stateErr != nil {

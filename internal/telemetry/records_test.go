@@ -36,6 +36,8 @@ func TestCollectMetricsUsesCanonicalResultsAndTraceCounters(t *testing.T) {
 				Source:                       control.DependencySourceStaticProgram,
 				Representation:               control.DependencyRepresentationMaxRAWPredecessor,
 				RepresentationBuilder:        control.DependencyRepresentationBuilderIndexedByKey,
+				WaitPolicy:                   control.DependencyWaitContiguousFrontier,
+				EstimateInjection:            control.DependencyEstimatesWrite,
 				SourceAvailableAt:            control.DependencyAvailableBeforeExecution,
 				SourceVersion:                control.DependencySourceVersionStaticScan,
 				AcquisitionDisposition:       control.DependencyDispositionRepresentation,
@@ -90,6 +92,8 @@ func TestCollectMetricsUsesCanonicalResultsAndTraceCounters(t *testing.T) {
 		metrics.Dependency.Source != control.DependencySourceStaticProgram ||
 		metrics.Dependency.Representation != control.DependencyRepresentationMaxRAWPredecessor ||
 		metrics.Dependency.RepresentationBuilder != control.DependencyRepresentationBuilderIndexedByKey ||
+		metrics.Dependency.WaitPolicy != control.DependencyWaitContiguousFrontier ||
+		metrics.Dependency.EstimateInjection != control.DependencyEstimatesWrite ||
 		metrics.Dependency.AcquisitionNS != 5 || metrics.Dependency.RepresentationNS != 7 ||
 		metrics.Dependency.RepresentationBuildUnits != 4 || metrics.Dependency.RepresentationEntries != 2 ||
 		metrics.Dependency.ResolutionNS != 11 || metrics.Dependency.TraversalSteps != 3 ||

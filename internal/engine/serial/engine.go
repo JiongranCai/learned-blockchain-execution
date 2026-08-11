@@ -72,7 +72,9 @@ func (e *Engine) ExecuteBlock(
 	if dependencyPlan.Mode != control.DependencyMVCCRuntime ||
 		dependencyPlan.Source != control.DependencySourceRuntimeObserved ||
 		dependencyPlan.Representation != control.DependencyRepresentationVersionOnly ||
-		dependencyPlan.RepresentationBuilder != control.DependencyRepresentationBuilderNone {
+		dependencyPlan.RepresentationBuilder != control.DependencyRepresentationBuilderNone ||
+		dependencyPlan.WaitPolicy != control.DependencyWaitNone ||
+		dependencyPlan.EstimateInjection != control.DependencyEstimatesDisabled {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, engineapi.ErrInvalidDependencyMode
 	}
 	if err := ctx.Err(); err != nil {
@@ -189,6 +191,8 @@ func (e *Engine) ExecuteBlock(
 			Source:                 control.DependencySourceRuntimeObserved,
 			Representation:         control.DependencyRepresentationVersionOnly,
 			RepresentationBuilder:  control.DependencyRepresentationBuilderNone,
+			WaitPolicy:             control.DependencyWaitNone,
+			EstimateInjection:      control.DependencyEstimatesDisabled,
 			SourceAvailableAt:      control.DependencyAvailableDuringExecution,
 			SourceVersion:          control.DependencySourceVersionRuntimeMVCC,
 			AcquisitionDisposition: control.DependencyDispositionRuntimeKernel,

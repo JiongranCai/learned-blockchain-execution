@@ -263,13 +263,10 @@ func (e *Engine) ExecuteBlock(
 		for index := range slots {
 			addWorkCounters(&finalTrace.Work, slots[index].work())
 		}
-		postGuidanceReexecutions := uint64(0)
-		postGuidanceReexecutionUnits := uint64(0)
-		if dependency.controller != nil {
-			postGuidanceReexecutions = finalTrace.Work.ReexecutionAttempts
-			postGuidanceReexecutionUnits = finalTrace.Work.ReexecutedExecutionUnits
-		}
-		finalTrace.Work.Dependency = dependency.Counters(postGuidanceReexecutions, postGuidanceReexecutionUnits)
+		finalTrace.Work.Dependency = dependency.Counters(
+			finalTrace.Work.ReexecutionAttempts,
+			finalTrace.Work.ReexecutedExecutionUnits,
+		)
 	}
 	return result, finalTrace, nil
 }

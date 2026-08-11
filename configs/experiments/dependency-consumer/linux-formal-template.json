@@ -1,0 +1,135 @@
+{
+  "schema_version": "experiment-matrix-v6",
+  "statistical_protocol": "configs/statistical/protocol-v1.json",
+  "order_seed": 20260811,
+  "timeout": "2m",
+  "cases": [
+    {
+      "id": "raw-none",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_source": "static_program",
+      "dependency_representation": "raw_last_writer",
+      "dependency_representation_builder": "indexed_by_key",
+      "dependency_wait_policy": "none",
+      "dependency_estimate_injection": "disabled",
+      "trace_mode": "counters"
+    },
+    {
+      "id": "raw-direct-wait",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_source": "static_program",
+      "dependency_representation": "raw_last_writer",
+      "dependency_representation_builder": "indexed_by_key",
+      "dependency_wait_policy": "direct_predecessor_wait",
+      "dependency_estimate_injection": "disabled",
+      "trace_mode": "counters"
+    },
+    {
+      "id": "raw-write-estimates",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_source": "static_program",
+      "dependency_representation": "raw_last_writer",
+      "dependency_representation_builder": "indexed_by_key",
+      "dependency_wait_policy": "none",
+      "dependency_estimate_injection": "write_estimates",
+      "trace_mode": "counters"
+    },
+    {
+      "id": "summary-none",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_source": "static_program",
+      "dependency_representation": "max_raw_predecessor",
+      "dependency_representation_builder": "indexed_by_key",
+      "dependency_wait_policy": "none",
+      "dependency_estimate_injection": "disabled",
+      "trace_mode": "counters"
+    },
+    {
+      "id": "summary-frontier-wait",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_source": "static_program",
+      "dependency_representation": "max_raw_predecessor",
+      "dependency_representation_builder": "indexed_by_key",
+      "dependency_wait_policy": "contiguous_frontier_wait",
+      "dependency_estimate_injection": "disabled",
+      "trace_mode": "counters"
+    },
+    {
+      "id": "full-graph-none",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_source": "static_program",
+      "dependency_representation": "full_conflict_graph",
+      "dependency_representation_builder": "indexed_by_key",
+      "dependency_wait_policy": "none",
+      "dependency_estimate_injection": "disabled",
+      "trace_mode": "counters"
+    },
+    {
+      "id": "full-graph-all-wait",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_source": "static_program",
+      "dependency_representation": "full_conflict_graph",
+      "dependency_representation_builder": "indexed_by_key",
+      "dependency_wait_policy": "all_predecessors_wait",
+      "dependency_estimate_injection": "disabled",
+      "trace_mode": "counters"
+    }
+  ],
+  "run_class": "formal",
+  "workload": {
+    "synthetic": {
+      "seed": 20260802,
+      "initial_keys": 8,
+      "key_space": 1,
+      "block_count": 1,
+      "transactions_per_block": 512,
+      "max_compute_units": 100,
+      "transaction_max_units": 104,
+      "failure_every": 0
+    },
+    "expected_hash": "5f06a85c3e71b3cda38e09b3fb94bdbb60c2ab6646211a535d15818cc4940ab9"
+  },
+  "warmup_rounds": 3,
+  "measurement_rounds": 30,
+  "environment": {
+    "affinity": "REPLACE_WITH_FROZEN_LINUX_CPUSET",
+    "numa_policy": "REPLACE_WITH_FROZEN_LINUX_NUMA_POLICY",
+    "state_reset": "fresh_state_from_frozen_artifact",
+    "page_cache": "REPLACE_WITH_FROZEN_LINUX_PAGE_CACHE_POLICY",
+    "process_reuse": "fresh_process_per_run"
+  },
+  "output": {
+    "validation_bundle": "results/dependency-consumer/linux-formal/validation-bundle.json",
+    "validation_records": "results/dependency-consumer/linux-formal/validation.jsonl",
+    "run_records": "results/dependency-consumer/linux-formal/runs.jsonl",
+    "action_traces": "results/dependency-consumer/linux-formal/action-traces.jsonl"
+  }
+}

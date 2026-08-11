@@ -1,5 +1,5 @@
 {
-  "schema_version": "experiment-matrix-v5",
+  "schema_version": "experiment-matrix-v6",
   "run_class": "smoke",
   "workload": {
     "synthetic": {
@@ -44,6 +44,8 @@
       "dependency_source": "runtime_observed",
       "dependency_representation": "version_only",
       "dependency_representation_builder": "none",
+      "dependency_wait_policy": "none",
+      "dependency_estimate_injection": "disabled",
       "trace_mode": "counters"
     },
     {
@@ -56,6 +58,8 @@
       "dependency_source": "runtime_observed",
       "dependency_representation": "version_only",
       "dependency_representation_builder": "none",
+      "dependency_wait_policy": "none",
+      "dependency_estimate_injection": "disabled",
       "trace_mode": "counters"
     },
     {
@@ -68,6 +72,8 @@
       "dependency_source": "runtime_observed",
       "dependency_representation": "version_only",
       "dependency_representation_builder": "none",
+      "dependency_wait_policy": "none",
+      "dependency_estimate_injection": "disabled",
       "trace_mode": "counters"
     },
     {
@@ -80,6 +86,8 @@
       "dependency_source": "runtime_observed",
       "dependency_representation": "version_only",
       "dependency_representation_builder": "none",
+      "dependency_wait_policy": "none",
+      "dependency_estimate_injection": "disabled",
       "trace_mode": "counters"
     }
   ],

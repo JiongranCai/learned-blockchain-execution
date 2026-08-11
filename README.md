@@ -11,12 +11,14 @@ The current implementation focuses on a reproducible motivation and systems-eval
 - A common engine and policy interface shared by serial execution and Block-STM.
 - Seeded synthetic workloads with hash-sealed artifacts, configurable uniform or hotspot/cold-tail key-access distributions, stable operation identifiers, state-dependent branches, and an explicit boundary between engine-visible inputs and audit-only ground truth.
 - A configurable speculation window through `max_speculative_inflight`.
-- Dependency controls that expose CQ3-I acquisition and CQ3-R representation as separate stages:
+- Dependency controls that expose CQ3-I acquisition, CQ3-R representation, and CQ3-U consumers as separate stages:
   - `runtime_observed` uses the mandatory MVCC runtime path;
   - `static_program` scans engine-visible programs before execution; with `mvcc_runtime` the acquired artifact is measured and discarded;
   - `version_only`, `raw_last_writer`, `max_raw_predecessor`, and `full_conflict_graph` select independently measured representations;
   - `full_conflict_graph` has both a quadratic diagnostic builder and a correctness-equivalent key-indexed builder;
-  - legacy `declared_dag`, `summary`, and `full_graph` scheduling bundles remain available for historical reproduction, while CQ3-R builds representations without a static consumer.
+  - `dependency_wait_policy` independently selects no wait, direct-predecessor wait, contiguous-frontier wait, or all-predecessors wait;
+  - `dependency_estimate_injection` independently enables or disables static write estimates;
+  - legacy `declared_dag`, `summary`, and `full_graph` bundles remain available for historical reproduction, while new CQ3-R/U experiments use explicit stage controls.
 - Differential validation against the serial oracle before a candidate can be benchmarked.
 - Schema-versioned experiment matrices, isolated worker processes, provenance records, action traces, and mechanism-specific telemetry.
 
@@ -71,12 +73,15 @@ Convenience scripts cover the implemented comparison families:
 ./scripts/run_speculation_window_smoke.sh
 ./scripts/run_dependency_guidance_smoke.sh
 ./scripts/run_dependency_representation_smoke.sh
+./scripts/run_dependency_consumer_smoke.sh
 ./scripts/summarize_dependency_guidance.sh
 ```
 
 CQ3-I acquisition-only smoke matrices live under `configs/experiments/dependency-acquisition/`. They hold `dependency_mode=mvcc_runtime`, `max_speculative_inflight=W`, and every consumer fixed while comparing `runtime_observed` with `static_program` acquisition paid then discarded.
 
 CQ3-R representation-only matrices live under `configs/experiments/dependency-representation/`. They hold `dependency_source=static_program`, `dependency_mode=mvcc_runtime`, `max_speculative_inflight=W`, and every static consumer disabled while comparing the representation and builder fields.
+
+CQ3-U consumer-only matrices live under `configs/experiments/dependency-consumer/`. They hold the source, representation, builder, `P=8`, and `L=W` fixed within each matched contrast. Three pairs isolate direct, frontier, and all-predecessor waits with write estimates disabled; one additional RAW pair isolates write-estimate injection with waiting disabled. Runtime MVCC validation and whole-transaction reexecution remain mandatory in every cell.
 
 Smoke runs are correctness checks and pilot evidence. Formal performance runs belong on a controlled Linux server with frozen CPU affinity, NUMA policy, page-cache policy, toolchain, and statistical protocol. The committed formal templates intentionally reject placeholder environment controls.
 

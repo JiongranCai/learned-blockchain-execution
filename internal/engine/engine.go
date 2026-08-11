@@ -29,13 +29,15 @@ type RunConfig struct {
 	// MaxSpeculativeInflight bounds admitted transactions beyond the stable
 	// validated frontier. Zero means the full block window (W).
 	MaxSpeculativeInflight int
-	// DependencyMode retains the legacy consumer bundle. Source,
-	// Representation, and RepresentationBuilder are explicit pipeline stages.
+	// DependencyMode retains the legacy consumer bundle. The remaining fields
+	// expose acquisition, representation, and consumer stages independently.
 	// Zero values preserve the runtime-MVCC baseline for direct engine callers.
 	DependencyMode                  control.DependencyMode
 	DependencySource                control.DependencySource
 	DependencyRepresentation        control.DependencyRepresentation
 	DependencyRepresentationBuilder control.DependencyRepresentationBuilder
+	DependencyWaitPolicy            control.DependencyWaitPolicy
+	DependencyEstimateInjection     control.DependencyEstimateInjection
 	OmitResultDigest                bool
 }
 
@@ -44,6 +46,8 @@ type DependencyPlan struct {
 	Source                control.DependencySource
 	Representation        control.DependencyRepresentation
 	RepresentationBuilder control.DependencyRepresentationBuilder
+	WaitPolicy            control.DependencyWaitPolicy
+	EstimateInjection     control.DependencyEstimateInjection
 }
 
 func EffectiveDependencyControl(config RunConfig) (DependencyPlan, error) {
@@ -91,12 +95,80 @@ func EffectiveDependencyControl(config RunConfig) (DependencyPlan, error) {
 	if mode != control.DependencyMVCCRuntime && representation != legacyRepresentation(mode) {
 		return DependencyPlan{}, fmt.Errorf("%w: legacy mode %q requires representation %q", ErrInvalidDependencyMode, mode, legacyRepresentation(mode))
 	}
+	waitPolicy := config.DependencyWaitPolicy
+	if waitPolicy == "" {
+		waitPolicy = legacyWaitPolicy(mode)
+	}
+	if !control.ValidDependencyWaitPolicy(waitPolicy) {
+		return DependencyPlan{}, fmt.Errorf("%w: unknown wait policy %q", ErrInvalidDependencyMode, waitPolicy)
+	}
+	estimateInjection := config.DependencyEstimateInjection
+	if estimateInjection == "" {
+		estimateInjection = legacyEstimateInjection(mode)
+	}
+	if !control.ValidDependencyEstimateInjection(estimateInjection) {
+		return DependencyPlan{}, fmt.Errorf("%w: unknown estimate injection %q", ErrInvalidDependencyMode, estimateInjection)
+	}
+	if err := validateDependencyConsumers(source, representation, waitPolicy, estimateInjection); err != nil {
+		return DependencyPlan{}, err
+	}
+	if mode != control.DependencyMVCCRuntime &&
+		(waitPolicy != legacyWaitPolicy(mode) || estimateInjection != legacyEstimateInjection(mode)) {
+		return DependencyPlan{}, fmt.Errorf("%w: legacy mode %q requires wait %q and estimates %q", ErrInvalidDependencyMode, mode, legacyWaitPolicy(mode), legacyEstimateInjection(mode))
+	}
 	return DependencyPlan{
 		Mode:                  mode,
 		Source:                source,
 		Representation:        representation,
 		RepresentationBuilder: builder,
+		WaitPolicy:            waitPolicy,
+		EstimateInjection:     estimateInjection,
 	}, nil
+}
+
+func legacyWaitPolicy(mode control.DependencyMode) control.DependencyWaitPolicy {
+	switch mode {
+	case control.DependencyDeclaredDAG:
+		return control.DependencyWaitDirectPredecessors
+	case control.DependencySummary:
+		return control.DependencyWaitContiguousFrontier
+	case control.DependencyFullGraph:
+		return control.DependencyWaitAllPredecessors
+	default:
+		return control.DependencyWaitNone
+	}
+}
+
+func legacyEstimateInjection(mode control.DependencyMode) control.DependencyEstimateInjection {
+	if mode == control.DependencyMVCCRuntime {
+		return control.DependencyEstimatesDisabled
+	}
+	return control.DependencyEstimatesWrite
+}
+
+func validateDependencyConsumers(
+	source control.DependencySource,
+	representation control.DependencyRepresentation,
+	waitPolicy control.DependencyWaitPolicy,
+	estimateInjection control.DependencyEstimateInjection,
+) error {
+	if source == control.DependencySourceRuntimeObserved &&
+		(waitPolicy != control.DependencyWaitNone || estimateInjection != control.DependencyEstimatesDisabled) {
+		return fmt.Errorf("%w: static consumers require static_program information", ErrInvalidDependencyMode)
+	}
+	wantRepresentation := control.DependencyRepresentationVersionOnly
+	switch waitPolicy {
+	case control.DependencyWaitDirectPredecessors:
+		wantRepresentation = control.DependencyRepresentationRAWLastWriter
+	case control.DependencyWaitContiguousFrontier:
+		wantRepresentation = control.DependencyRepresentationMaxRAWPredecessor
+	case control.DependencyWaitAllPredecessors:
+		wantRepresentation = control.DependencyRepresentationFullConflictGraph
+	}
+	if waitPolicy != control.DependencyWaitNone && representation != wantRepresentation {
+		return fmt.Errorf("%w: wait policy %q requires representation %q", ErrInvalidDependencyMode, waitPolicy, wantRepresentation)
+	}
+	return nil
 }
 
 func legacyRepresentation(mode control.DependencyMode) control.DependencyRepresentation {

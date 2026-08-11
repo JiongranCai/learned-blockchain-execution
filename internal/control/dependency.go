@@ -87,6 +87,44 @@ func ValidDependencyRepresentationBuilder(builder DependencyRepresentationBuilde
 	}
 }
 
+// DependencyWaitPolicy selects the execution-entry gate that consumes a
+// static dependency representation. The current Block-STM adapter applies the
+// gate inside TxExecutor, so a waiting transaction occupies a worker.
+type DependencyWaitPolicy string
+
+const (
+	DependencyWaitNone               DependencyWaitPolicy = "none"
+	DependencyWaitDirectPredecessors DependencyWaitPolicy = "direct_predecessor_wait"
+	DependencyWaitContiguousFrontier DependencyWaitPolicy = "contiguous_frontier_wait"
+	DependencyWaitAllPredecessors    DependencyWaitPolicy = "all_predecessors_wait"
+)
+
+func ValidDependencyWaitPolicy(policy DependencyWaitPolicy) bool {
+	switch policy {
+	case DependencyWaitNone,
+		DependencyWaitDirectPredecessors,
+		DependencyWaitContiguousFrontier,
+		DependencyWaitAllPredecessors:
+		return true
+	default:
+		return false
+	}
+}
+
+// DependencyEstimateInjection controls whether statically named write keys
+// are supplied to the frozen Block-STM kernel as ESTIMATE locations. It is
+// independent of dependency waiting.
+type DependencyEstimateInjection string
+
+const (
+	DependencyEstimatesDisabled DependencyEstimateInjection = "disabled"
+	DependencyEstimatesWrite    DependencyEstimateInjection = "write_estimates"
+)
+
+func ValidDependencyEstimateInjection(injection DependencyEstimateInjection) bool {
+	return injection == DependencyEstimatesDisabled || injection == DependencyEstimatesWrite
+}
+
 const (
 	DependencyAvailableDuringExecution           = "during_execution"
 	DependencyAvailableBeforeExecution           = "before_execution"
@@ -94,6 +132,7 @@ const (
 	DependencySourceVersionStaticScan            = "flat-static-scan-v1"
 	DependencyDispositionRuntimeKernel           = "runtime_kernel"
 	DependencyDispositionDiscarded               = "discarded_after_acquisition"
+	DependencyDispositionAcquisitionConsumer     = "acquisition_consumed"
 	DependencyDispositionRepresentation          = "representation_consumed"
 	DependencyDispositionRepresentationDiscarded = "representation_built_then_discarded"
 )
@@ -108,6 +147,8 @@ type DependencyCounters struct {
 	Source                       DependencySource                `json:"source"`
 	Representation               DependencyRepresentation        `json:"representation"`
 	RepresentationBuilder        DependencyRepresentationBuilder `json:"representation_builder"`
+	WaitPolicy                   DependencyWaitPolicy            `json:"wait_policy"`
+	EstimateInjection            DependencyEstimateInjection     `json:"estimate_injection"`
 	SourceAvailableAt            string                          `json:"source_available_at"`
 	SourceVersion                string                          `json:"source_version"`
 	AcquisitionDisposition       string                          `json:"acquisition_disposition"`

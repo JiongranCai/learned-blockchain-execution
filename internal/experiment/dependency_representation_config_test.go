@@ -29,6 +29,8 @@ func TestCQ3RRepresentationMatricesFreezeSourceAndConsumers(t *testing.T) {
 					experimentCase.MaxSpeculativeInflight != 0 ||
 					experimentCase.DependencyMode != control.DependencyMVCCRuntime ||
 					experimentCase.DependencySource != control.DependencySourceStaticProgram ||
+					experimentCase.DependencyWaitPolicy != control.DependencyWaitNone ||
+					experimentCase.DependencyEstimateInjection != control.DependencyEstimatesDisabled ||
 					experimentCase.TraceMode != control.TraceCounters {
 					t.Fatalf("case %s changes a frozen non-CQ3-R control", experimentCase.ID)
 				}

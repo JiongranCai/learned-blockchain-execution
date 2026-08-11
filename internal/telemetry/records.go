@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	BenchmarkRecordSchema  = "benchmark-run-v5"
-	ValidationRecordSchema = "validation-run-v5"
-	ActionTraceSchema      = "action-trace-v5"
+	BenchmarkRecordSchema  = "benchmark-run-v6"
+	ValidationRecordSchema = "validation-run-v6"
+	ActionTraceSchema      = "action-trace-v6"
 	AblationRecordSchema   = "telemetry-ablation-v1"
 )
 
@@ -27,6 +27,8 @@ type Case struct {
 	DependencySource                control.DependencySource                `json:"dependency_source"`
 	DependencyRepresentation        control.DependencyRepresentation        `json:"dependency_representation"`
 	DependencyRepresentationBuilder control.DependencyRepresentationBuilder `json:"dependency_representation_builder"`
+	DependencyWaitPolicy            control.DependencyWaitPolicy            `json:"dependency_wait_policy"`
+	DependencyEstimateInjection     control.DependencyEstimateInjection     `json:"dependency_estimate_injection"`
 	TraceMode                       control.TraceMode                       `json:"trace_mode"`
 }
 
@@ -275,6 +277,8 @@ func mergeDependencyCounters(target *control.DependencyCounters, source control.
 		target.Source = source.Source
 		target.Representation = source.Representation
 		target.RepresentationBuilder = source.RepresentationBuilder
+		target.WaitPolicy = source.WaitPolicy
+		target.EstimateInjection = source.EstimateInjection
 		target.SourceAvailableAt = source.SourceAvailableAt
 		target.SourceVersion = source.SourceVersion
 		target.AcquisitionDisposition = source.AcquisitionDisposition

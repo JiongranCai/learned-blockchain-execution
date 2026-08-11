@@ -26,6 +26,8 @@ func TestCQ3IAcquisitionMatricesFreezeOtherDependencyControls(t *testing.T) {
 					experimentCase.DependencyMode != control.DependencyMVCCRuntime ||
 					experimentCase.DependencyRepresentation != control.DependencyRepresentationVersionOnly ||
 					experimentCase.DependencyRepresentationBuilder != control.DependencyRepresentationBuilderNone ||
+					experimentCase.DependencyWaitPolicy != control.DependencyWaitNone ||
+					experimentCase.DependencyEstimateInjection != control.DependencyEstimatesDisabled ||
 					experimentCase.TraceMode != control.TraceCounters {
 					t.Fatalf("case %s changes a frozen non-CQ3-I control", experimentCase.ID)
 				}

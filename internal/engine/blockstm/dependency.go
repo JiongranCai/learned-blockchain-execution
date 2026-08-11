@@ -17,9 +17,10 @@ import (
 // static modes acquire the same conservative program access information;
 // only their representation and scheduling use differ.
 type dependencyPreparation struct {
-	base       control.DependencyCounters
-	controller *dependencyController
-	estimates  []kernel.MultiLocations
+	base           control.DependencyCounters
+	controller     *dependencyController
+	estimates      []kernel.MultiLocations
+	consumerActive bool
 }
 
 func prepareDependency(
@@ -39,48 +40,55 @@ func prepareDependency(
 		return preparation, nil
 	}
 
-	if plan.Representation == control.DependencyRepresentationVersionOnly {
-		preparation.base.AcquisitionDisposition = control.DependencyDispositionDiscarded
-		return preparation, nil
+	var representation dependencyRepresentationArtifact
+	if plan.Representation != control.DependencyRepresentationVersionOnly {
+		representationStarted := measuredStart(capture)
+		representation, err = buildDependencyRepresentation(ctx, artifact.staticAccesses, plan)
+		if err != nil {
+			return dependencyPreparation{}, err
+		}
+		preparation.base.RepresentationMeasured = capture
+		preparation.base.RepresentationNS = measuredElapsed(representationStarted)
+		preparation.base.RepresentationBuildUnits = representation.buildUnits
+		preparation.base.RepresentationLogicalBytes = representation.logicalBytes
+		preparation.base.RepresentationEntries = representation.entries
+		preparation.base.RepresentationMaxFanIn = representation.maxFanIn
+		preparation.base.DependencyEdges = representation.edges
+		preparation.base.SummaryEntries = representation.summaryEntries
 	}
 
-	representationStarted := measuredStart(capture)
-	representation, err := buildDependencyRepresentation(ctx, artifact.staticAccesses, plan)
-	if err != nil {
-		return dependencyPreparation{}, err
-	}
-	preparation.base.RepresentationMeasured = capture
-	preparation.base.RepresentationNS = measuredElapsed(representationStarted)
-	preparation.base.RepresentationBuildUnits = representation.buildUnits
-	preparation.base.RepresentationLogicalBytes = representation.logicalBytes
-	preparation.base.RepresentationEntries = representation.entries
-	preparation.base.RepresentationMaxFanIn = representation.maxFanIn
-	preparation.base.DependencyEdges = representation.edges
-	preparation.base.SummaryEntries = representation.summaryEntries
-
-	// CQ3-R representation isolation: build the selected structure inside the
-	// timed interval, then discard it without a static execution consumer.
-	if plan.Mode == control.DependencyMVCCRuntime {
+	preparation.consumerActive = plan.WaitPolicy != control.DependencyWaitNone ||
+		plan.EstimateInjection != control.DependencyEstimatesDisabled
+	switch {
+	case plan.WaitPolicy != control.DependencyWaitNone:
+		preparation.base.AcquisitionDisposition = control.DependencyDispositionRepresentation
+	case plan.Representation != control.DependencyRepresentationVersionOnly:
 		preparation.base.AcquisitionDisposition = control.DependencyDispositionRepresentationDiscarded
-		return preparation, nil
+	case preparation.consumerActive:
+		preparation.base.AcquisitionDisposition = control.DependencyDispositionAcquisitionConsumer
+	default:
+		preparation.base.AcquisitionDisposition = control.DependencyDispositionDiscarded
 	}
-	preparation.base.AcquisitionDisposition = control.DependencyDispositionRepresentation
 
-	var gate dependencyGate
-	if len(representation.barriers) > 0 {
-		gate = newSummaryDependencyGate(representation.barriers)
-	} else {
-		gate = newExplicitDependencyGate(representation.predecessors)
+	if plan.WaitPolicy != control.DependencyWaitNone {
+		var gate dependencyGate
+		if plan.WaitPolicy == control.DependencyWaitContiguousFrontier {
+			gate = newSummaryDependencyGate(representation.barriers)
+		} else {
+			gate = newExplicitDependencyGate(representation.predecessors)
+		}
+		preparation.controller = &dependencyController{gate: gate, capture: capture}
+		preparation.base.ResolutionMeasured = capture
 	}
-	estimateStarted := measuredStart(capture)
-	preparation.estimates, preparation.base.EstimatedWriteLocations, preparation.base.EstimatedWriteKeyBytes, err =
-		buildWriteEstimates(ctx, artifact.staticAccesses, storeIndex)
-	if err != nil {
-		return dependencyPreparation{}, err
+	if plan.EstimateInjection == control.DependencyEstimatesWrite {
+		estimateStarted := measuredStart(capture)
+		preparation.estimates, preparation.base.EstimatedWriteLocations, preparation.base.EstimatedWriteKeyBytes, err =
+			buildWriteEstimates(ctx, artifact.staticAccesses, storeIndex)
+		if err != nil {
+			return dependencyPreparation{}, err
+		}
+		preparation.base.EstimateBuildNS = measuredElapsed(estimateStarted)
 	}
-	preparation.base.EstimateBuildNS = measuredElapsed(estimateStarted)
-	preparation.controller = &dependencyController{gate: gate, capture: capture}
-	preparation.base.ResolutionMeasured = capture
 	return preparation, nil
 }
 
@@ -164,6 +172,8 @@ func (a dependencyInformationArtifact) counters(plan engineapi.DependencyPlan) c
 		Source:                a.source,
 		Representation:        plan.Representation,
 		RepresentationBuilder: plan.RepresentationBuilder,
+		WaitPolicy:            plan.WaitPolicy,
+		EstimateInjection:     plan.EstimateInjection,
 		SourceAvailableAt:     a.availableAt,
 		SourceVersion:         a.version,
 		InformationComplete:   a.complete,
@@ -560,6 +570,8 @@ func (p dependencyPreparation) Counters(reexecutions, reexecutionUnits uint64) c
 		counters.WaitedExecutionAttempts = p.controller.waited.Load()
 		counters.WaitEvents = p.controller.waitEvents.Load()
 		counters.WaitNS = p.controller.waitNS.Load()
+	}
+	if p.consumerActive {
 		counters.PostGuidanceReexecutions = reexecutions
 		counters.PostGuidanceReexecutionUnits = reexecutionUnits
 	}
