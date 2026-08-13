@@ -254,7 +254,7 @@ def gate(files, records, stage):
             require_equal(errors, record, case.get("dependency_source"), "runtime_observed", "dependency_source")
             require_equal(errors, record, case.get("dependency_representation"), "version_only", "dependency_representation")
             require_equal(errors, record, case.get("dependency_wait_policy"), "none", "dependency_wait_policy")
-            require_equal(errors, record, case.get("dependency_estimate_injection"), "none", "dependency_estimate_injection")
+            require_equal(errors, record, case.get("dependency_estimate_injection"), "disabled", "dependency_estimate_injection")
         elif plan == "estimate":
             require_equal(errors, record, case.get("dependency_source"), "static_program", "dependency_source")
             require_equal(errors, record, case.get("dependency_representation"), "version_only", "dependency_representation")
@@ -264,7 +264,7 @@ def gate(files, records, stage):
             base_plan = plan.removesuffix("-estimate")
             expected_representation = "raw_last_writer" if base_plan == "direct" else "max_raw_predecessor"
             expected_wait = "direct_predecessor_wait" if base_plan == "direct" else "contiguous_frontier_wait"
-            expected_estimates = "write_estimates" if plan.endswith("-estimate") else "none"
+            expected_estimates = "write_estimates" if plan.endswith("-estimate") else "disabled"
             require_equal(errors, record, case.get("dependency_source"), "static_program", "dependency_source")
             require_equal(errors, record, case.get("dependency_representation"), expected_representation, "dependency_representation")
             require_equal(errors, record, case.get("dependency_wait_policy"), expected_wait, "dependency_wait_policy")
