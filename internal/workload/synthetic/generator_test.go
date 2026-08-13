@@ -3,6 +3,7 @@ package synthetic_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"testing"
@@ -324,6 +325,112 @@ func TestStateDependentBranchShapeRecordsActualPathWithoutLeakingIt(t *testing.T
 	}
 	if len(artifact.EngineVisibleMetadata) != 0 {
 		t.Fatalf("branch ground truth leaked through metadata: %#v", artifact.EngineVisibleMetadata)
+	}
+}
+
+func TestSelectiveReadSetExposesCandidatesButExecutesOneRead(t *testing.T) {
+	config := synthetic.Config{
+		Seed:                 97,
+		InitialKeys:          80,
+		KeySpace:             16,
+		BlockCount:           1,
+		TransactionsPerBlock: 64,
+		MaxComputeUnits:      1,
+		TransactionMaxUnits:  14,
+		ProgramShape:         synthetic.ProgramShapeSelectiveReadSet,
+		BranchReadCandidates: 8,
+	}
+	artifact, err := synthetic.Generate(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Generator.Version != synthetic.GeneratorVersionV3 {
+		t.Fatalf("got generator version %q", artifact.Generator.Version)
+	}
+	state, err := artifact.NewState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := executeArtifact(t, artifact.OrderedBlocks, state)
+	selectedKeys := make(map[string]struct{})
+	for index, transaction := range results[0].Transactions {
+		truth := artifact.GroundTruth[index]
+		if len(transaction.Reads) != 2 || len(truth.Accesses) != 3 {
+			t.Fatalf("transaction %d did not execute selector + one candidate read + write: result=%#v truth=%#v", index, transaction, truth)
+		}
+		readInstructions := 0
+		for _, instruction := range artifact.OrderedBlocks[0].Transactions[index].Program.Instructions {
+			if instruction.Op == model.OpRead {
+				readInstructions++
+			}
+		}
+		if readInstructions != config.BranchReadCandidates+1 {
+			t.Fatalf("transaction %d exposes %d reads, want %d", index, readInstructions, config.BranchReadCandidates+1)
+		}
+		if string(truth.Accesses[1].Key) != string(truth.Accesses[2].Key) {
+			t.Fatalf("transaction %d write does not match selected read: %#v", index, truth.Accesses)
+		}
+		if string(transaction.Reads[1].Key) != string(truth.Accesses[1].Key) {
+			t.Fatalf("transaction %d executed read %q, ground truth says %q", index, transaction.Reads[1].Key, truth.Accesses[1].Key)
+		}
+		selectedKeys[string(truth.Accesses[1].Key)] = struct{}{}
+	}
+	if len(selectedKeys) < 2 {
+		t.Fatalf("seed selected only %d candidate keys", len(selectedKeys))
+	}
+}
+
+func TestStagedFanInBuildsParallelProducerWaves(t *testing.T) {
+	const fanIn = 5
+	config := synthetic.Config{
+		Seed:                 101,
+		InitialKeys:          18,
+		KeySpace:             18,
+		BlockCount:           1,
+		TransactionsPerBlock: 18,
+		MaxComputeUnits:      1,
+		TransactionMaxUnits:  9,
+		ProgramShape:         synthetic.ProgramShapeStagedFanIn,
+		StageFanIn:           fanIn,
+	}
+	artifact, err := synthetic.Generate(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Generator.Version != synthetic.GeneratorVersionV3 {
+		t.Fatalf("got generator version %q", artifact.Generator.Version)
+	}
+	state, err := artifact.NewState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := executeArtifact(t, artifact.OrderedBlocks, state)
+	for index, transaction := range results[0].Transactions {
+		truth := artifact.GroundTruth[index]
+		role := index % (fanIn + 1)
+		stage := index / (fanIn + 1)
+		if role == fanIn {
+			if len(transaction.Reads) != fanIn || len(truth.Accesses) != fanIn+1 {
+				t.Fatalf("consumer %d does not read its full producer wave: result=%#v truth=%#v", index, transaction, truth)
+			}
+			for predecessor := 0; predecessor < fanIn; predecessor++ {
+				want := fmt.Sprintf("key-%08d", index-fanIn+predecessor)
+				if string(truth.Accesses[predecessor].Key) != want {
+					t.Fatalf("consumer %d read %q, want %q", index, truth.Accesses[predecessor].Key, want)
+				}
+			}
+			continue
+		}
+		if len(transaction.Reads) != 1 || len(truth.Accesses) != 2 {
+			t.Fatalf("producer %d has unexpected accesses: result=%#v truth=%#v", index, transaction, truth)
+		}
+		wantRead := index
+		if stage > 0 {
+			wantRead = index - role - 1
+		}
+		if got := string(truth.Accesses[0].Key); got != fmt.Sprintf("key-%08d", wantRead) {
+			t.Fatalf("producer %d read %q, want prior barrier key %d", index, got, wantRead)
+		}
 	}
 }
 

@@ -16,6 +16,7 @@ const (
 	GeneratorName      = "synthetic"
 	GeneratorVersion   = "synthetic-v1"
 	GeneratorVersionV2 = "synthetic-v2"
+	GeneratorVersionV3 = "synthetic-v3"
 
 	AccessDistributionUniform = "uniform"
 	AccessDistributionHotspot = "hotspot"
@@ -30,14 +31,23 @@ var (
 	ErrInvalidComputeRange         = errors.New("min_compute_units must not exceed max_compute_units")
 	ErrInvalidFailureInterval      = errors.New("failure_every must be non-negative")
 	ErrInvalidProgramShape         = errors.New("unsupported synthetic program_shape")
-	ErrBranchKeySpace              = errors.New("state_dependent_branch requires initial_keys greater than key_space")
+	ErrBranchKeySpace              = errors.New("branching program shapes require initial_keys greater than key_space")
 	ErrInvalidAccessDistribution   = errors.New("unsupported access_distribution kind")
 	ErrInvalidHotKeyCount          = errors.New("hot_key_count must be in [1, key_space-1]")
 	ErrInvalidHotProbability       = errors.New("hot_access_probability must be strictly between 0 and 1")
 	ErrInvalidReadWriteCorrelation = errors.New("read_write_same_key_probability must be in [0, 1]")
+	ErrInvalidSelectiveReadCount   = errors.New("selective_read_set requires branch_read_candidates in [2, key_space]")
+	ErrInvalidStageFanIn           = errors.New("staged_fan_in requires stage_fan_in in [2, transactions_per_block-1]")
+	ErrStructuredKeySpace          = errors.New("staged_fan_in requires one key per generated transaction")
+	ErrStructuredDistribution      = errors.New("structured program shapes do not accept access_distribution")
+	ErrUnexpectedShapeParameter    = errors.New("program shape parameter is set for an incompatible shape")
 )
 
-const ProgramShapeStateDependentBranch = "state_dependent_branch"
+const (
+	ProgramShapeStateDependentBranch = "state_dependent_branch"
+	ProgramShapeSelectiveReadSet     = "selective_read_set"
+	ProgramShapeStagedFanIn          = "staged_fan_in"
+)
 
 type Config struct {
 	Seed                 int64                     `json:"seed"`
@@ -50,6 +60,8 @@ type Config struct {
 	TransactionMaxUnits  uint64                    `json:"transaction_max_units"`
 	FailureEvery         int                       `json:"failure_every"`
 	ProgramShape         string                    `json:"program_shape,omitempty"`
+	BranchReadCandidates int                       `json:"branch_read_candidates,omitempty"`
+	StageFanIn           int                       `json:"stage_fan_in,omitempty"`
 	AccessDistribution   *AccessDistributionConfig `json:"access_distribution,omitempty"`
 }
 
@@ -116,7 +128,8 @@ func Generate(config Config) (workload.Artifact, error) {
 
 			willFail := config.FailureEvery > 0 && (globalTransaction+1)%config.FailureEvery == 0
 			instructions, branchTruth := flatProgram(readKey, writeKey, delta, computeUnits)
-			if config.ProgramShape == ProgramShapeStateDependentBranch {
+			switch config.ProgramShape {
+			case ProgramShapeStateDependentBranch:
 				alternateReadKeyIndex := sampleKeyIndex(rng, config)
 				alternateReadKey := stateKey(alternateReadKeyIndex)
 				selectorIndex := config.KeySpace + rng.Intn(config.InitialKeys-config.KeySpace)
@@ -130,6 +143,30 @@ func Generate(config Config) (workload.Artifact, error) {
 					readKey,
 					alternateReadKey,
 					writeKey,
+					delta,
+					computeUnits,
+				)
+			case ProgramShapeSelectiveReadSet:
+				selectorIndex := config.KeySpace + globalTransaction%(config.InitialKeys-config.KeySpace)
+				candidateReadKeys := make([][]byte, config.BranchReadCandidates)
+				for candidateIndex := range candidateReadKeys {
+					candidateReadKeys[candidateIndex] = stateKey(candidateIndex)
+				}
+				selectedCandidate := int(initialValues[selectorIndex]) * config.BranchReadCandidates / 10_000
+				writeKey = candidateReadKeys[selectedCandidate]
+				instructions, branchTruth = selectiveReadSetProgram(
+					stateKey(selectorIndex),
+					initialValues[selectorIndex],
+					candidateReadKeys,
+					writeKey,
+					delta,
+					computeUnits,
+				)
+			case ProgramShapeStagedFanIn:
+				instructions, branchTruth = stagedFanInProgram(
+					transactionIndex,
+					globalTransaction,
+					config.StageFanIn,
 					delta,
 					computeUnits,
 				)
@@ -211,11 +248,39 @@ func validateConfig(config Config) error {
 	if config.MinComputeUnits > config.MaxComputeUnits {
 		return ErrInvalidComputeRange
 	}
-	if config.ProgramShape != "" && config.ProgramShape != ProgramShapeStateDependentBranch {
+	if config.ProgramShape != "" &&
+		config.ProgramShape != ProgramShapeStateDependentBranch &&
+		config.ProgramShape != ProgramShapeSelectiveReadSet &&
+		config.ProgramShape != ProgramShapeStagedFanIn {
 		return ErrInvalidProgramShape
 	}
-	if config.ProgramShape == ProgramShapeStateDependentBranch && config.InitialKeys <= config.KeySpace {
+	if (config.ProgramShape == ProgramShapeStateDependentBranch || config.ProgramShape == ProgramShapeSelectiveReadSet) &&
+		config.InitialKeys <= config.KeySpace {
 		return ErrBranchKeySpace
+	}
+	if config.ProgramShape == ProgramShapeSelectiveReadSet {
+		if config.BranchReadCandidates < 2 || config.BranchReadCandidates > config.KeySpace {
+			return ErrInvalidSelectiveReadCount
+		}
+		if config.StageFanIn != 0 {
+			return ErrUnexpectedShapeParameter
+		}
+	} else if config.BranchReadCandidates != 0 {
+		return ErrUnexpectedShapeParameter
+	}
+	if config.ProgramShape == ProgramShapeStagedFanIn {
+		if config.StageFanIn < 2 || config.StageFanIn >= config.TransactionsPerBlock {
+			return ErrInvalidStageFanIn
+		}
+		if config.BlockCount > config.KeySpace/config.TransactionsPerBlock {
+			return ErrStructuredKeySpace
+		}
+	} else if config.StageFanIn != 0 {
+		return ErrUnexpectedShapeParameter
+	}
+	if (config.ProgramShape == ProgramShapeSelectiveReadSet || config.ProgramShape == ProgramShapeStagedFanIn) &&
+		config.AccessDistribution != nil {
+		return ErrStructuredDistribution
 	}
 	if err := validateAccessDistribution(config); err != nil {
 		return err
@@ -228,6 +293,10 @@ func validateConfig(config Config) error {
 	minimumUnits := config.MaxComputeUnits + 4
 	if config.ProgramShape == ProgramShapeStateDependentBranch {
 		minimumUnits = config.MaxComputeUnits + 7
+	} else if config.ProgramShape == ProgramShapeSelectiveReadSet {
+		minimumUnits = config.MaxComputeUnits + uint64(config.BranchReadCandidates) + 5
+	} else if config.ProgramShape == ProgramShapeStagedFanIn {
+		minimumUnits = config.MaxComputeUnits + uint64(config.StageFanIn) + 3
 	}
 	if config.TransactionMaxUnits < minimumUnits {
 		return ErrInvalidTransactionBudget
@@ -264,6 +333,9 @@ func validateAccessDistribution(config Config) error {
 }
 
 func generatorVersion(config Config) string {
+	if config.ProgramShape == ProgramShapeSelectiveReadSet || config.ProgramShape == ProgramShapeStagedFanIn {
+		return GeneratorVersionV3
+	}
 	if config.AccessDistribution != nil || config.MinComputeUnits != 0 {
 		return GeneratorVersionV2
 	}
@@ -299,6 +371,19 @@ type programTruth struct {
 	write             int
 	conditionalJump   int
 	unconditionalJump int
+	explicit          *explicitProgramTruth
+}
+
+type explicitProgramTruth struct {
+	path     []int
+	reads    []int
+	writes   []int
+	branches []explicitBranchTruth
+}
+
+type explicitBranchTruth struct {
+	instruction int
+	taken       bool
 }
 
 func flatProgram(readKey, writeKey []byte, delta int64, computeUnits uint64) ([]model.Instruction, programTruth) {
@@ -360,7 +445,169 @@ func stateDependentBranchProgram(
 		}
 }
 
+func selectiveReadSetProgram(
+	selectorKey []byte,
+	selectorValue int64,
+	candidateReadKeys [][]byte,
+	writeKey []byte,
+	delta int64,
+	computeUnits uint64,
+) ([]model.Instruction, programTruth) {
+	candidateCount := len(candidateReadKeys)
+	selectedCandidate := int(selectorValue) * candidateCount / 10_000
+	instructions := []model.Instruction{{Op: model.OpRead, Key: selectorKey, Register: "selector"}}
+	conditionalIndices := make([]int, 0, candidateCount-1)
+	for candidateIndex := 0; candidateIndex < candidateCount-1; candidateIndex++ {
+		conditionalIndices = append(conditionalIndices, len(instructions))
+		threshold := int64(((candidateIndex+1)*10_000 + candidateCount - 1) / candidateCount)
+		instructions = append(instructions, model.Instruction{
+			Op: model.OpJumpIf,
+			Condition: model.Condition{
+				Kind:  model.ConditionLess,
+				Left:  model.Register("selector"),
+				Right: model.Literal(threshold),
+			},
+		})
+	}
+	defaultJumpIndex := len(instructions)
+	instructions = append(instructions, model.Instruction{
+		Op:        model.OpJumpIf,
+		Condition: model.Condition{Kind: model.ConditionAlways},
+	})
+
+	candidateReadIndices := make([]int, candidateCount)
+	candidateJumpIndices := make([]int, candidateCount-1)
+	for candidateIndex, candidateKey := range candidateReadKeys {
+		candidateReadIndices[candidateIndex] = len(instructions)
+		instructions = append(instructions, model.Instruction{
+			Op:       model.OpRead,
+			Key:      candidateKey,
+			Register: "value",
+		})
+		if candidateIndex < candidateCount-1 {
+			candidateJumpIndices[candidateIndex] = len(instructions)
+			instructions = append(instructions, model.Instruction{
+				Op:        model.OpJumpIf,
+				Condition: model.Condition{Kind: model.ConditionAlways},
+			})
+		}
+	}
+	computeIndex := len(instructions)
+	instructions = append(instructions,
+		model.Instruction{Op: model.OpCompute, ComputeUnits: computeUnits},
+		model.Instruction{
+			Op:  model.OpWrite,
+			Key: writeKey,
+			Expression: model.Expression{
+				Base:  model.Register("value"),
+				Delta: delta,
+			},
+		},
+	)
+	writeIndex := len(instructions) - 1
+	for candidateIndex, conditionalIndex := range conditionalIndices {
+		instructions[conditionalIndex].Target = candidateReadIndices[candidateIndex]
+	}
+	instructions[defaultJumpIndex].Target = candidateReadIndices[candidateCount-1]
+	for _, jumpIndex := range candidateJumpIndices {
+		instructions[jumpIndex].Target = computeIndex
+	}
+
+	path := []int{0}
+	branchTruth := make([]explicitBranchTruth, 0, candidateCount+1)
+	for candidateIndex, conditionalIndex := range conditionalIndices {
+		taken := candidateIndex == selectedCandidate
+		path = append(path, conditionalIndex)
+		branchTruth = append(branchTruth, explicitBranchTruth{instruction: conditionalIndex, taken: taken})
+		if taken {
+			break
+		}
+	}
+	if selectedCandidate == candidateCount-1 {
+		path = append(path, defaultJumpIndex)
+		branchTruth = append(branchTruth, explicitBranchTruth{instruction: defaultJumpIndex, taken: true})
+	}
+	path = append(path, candidateReadIndices[selectedCandidate])
+	if selectedCandidate < candidateCount-1 {
+		jumpIndex := candidateJumpIndices[selectedCandidate]
+		path = append(path, jumpIndex)
+		branchTruth = append(branchTruth, explicitBranchTruth{instruction: jumpIndex, taken: true})
+	}
+	path = append(path, computeIndex, writeIndex)
+
+	return instructions, programTruth{explicit: &explicitProgramTruth{
+		path:     path,
+		reads:    []int{0, candidateReadIndices[selectedCandidate]},
+		writes:   []int{writeIndex},
+		branches: branchTruth,
+	}}
+}
+
+func stagedFanInProgram(
+	transactionIndex int,
+	globalTransaction int,
+	fanIn int,
+	delta int64,
+	computeUnits uint64,
+) ([]model.Instruction, programTruth) {
+	role := transactionIndex % (fanIn + 1)
+	stage := transactionIndex / (fanIn + 1)
+	writeKey := stateKey(globalTransaction)
+	if role < fanIn {
+		readKey := writeKey
+		if stage > 0 {
+			readKey = stateKey(globalTransaction - role - 1)
+		}
+		return flatProgram(readKey, writeKey, delta, computeUnits)
+	}
+
+	instructions := make([]model.Instruction, 0, fanIn+2)
+	readIndices := make([]int, 0, fanIn)
+	for predecessor := globalTransaction - fanIn; predecessor < globalTransaction; predecessor++ {
+		readIndices = append(readIndices, len(instructions))
+		register := fmt.Sprintf("fanin-%d", predecessor)
+		if len(readIndices) == 1 {
+			register = "value"
+		}
+		instructions = append(instructions, model.Instruction{
+			Op:       model.OpRead,
+			Key:      stateKey(predecessor),
+			Register: register,
+		})
+	}
+	instructions = append(instructions,
+		model.Instruction{Op: model.OpCompute, ComputeUnits: computeUnits},
+		model.Instruction{
+			Op:  model.OpWrite,
+			Key: writeKey,
+			Expression: model.Expression{
+				Base:  model.Register("value"),
+				Delta: delta,
+			},
+		},
+	)
+	writeIndex := len(instructions) - 1
+	path := make([]int, len(instructions))
+	for index := range path {
+		path[index] = index
+	}
+	return instructions, programTruth{explicit: &explicitProgramTruth{
+		path:   path,
+		reads:  readIndices,
+		writes: []int{writeIndex},
+	}}
+}
+
 func (truth programTruth) actualInstructionIndices(willFail bool, instructionCount int) []int {
+	if truth.explicit != nil {
+		indices := append([]int(nil), truth.explicit.path...)
+		if willFail {
+			indices = append(indices, instructionCount-2)
+		} else {
+			indices = append(indices, instructionCount-1)
+		}
+		return indices
+	}
 	if !truth.branching {
 		count := instructionCount
 		if willFail {
@@ -389,6 +636,24 @@ func (truth programTruth) actualInstructionIndices(willFail bool, instructionCou
 }
 
 func (truth programTruth) accesses(instructions []model.Instruction) []workload.GroundTruthAccess {
+	if truth.explicit != nil {
+		accesses := make([]workload.GroundTruthAccess, 0, len(truth.explicit.reads)+len(truth.explicit.writes))
+		for _, readIndex := range truth.explicit.reads {
+			accesses = append(accesses, workload.GroundTruthAccess{
+				OperationID: instructions[readIndex].ID,
+				Mode:        workload.AccessRead,
+				Key:         cloneBytes(instructions[readIndex].Key),
+			})
+		}
+		for _, writeIndex := range truth.explicit.writes {
+			accesses = append(accesses, workload.GroundTruthAccess{
+				OperationID: instructions[writeIndex].ID,
+				Mode:        workload.AccessWrite,
+				Key:         cloneBytes(instructions[writeIndex].Key),
+			})
+		}
+		return accesses
+	}
 	readIndex := truth.selectorRead
 	accesses := make([]workload.GroundTruthAccess, 0, 3)
 	if truth.branching {
@@ -419,6 +684,17 @@ func (truth programTruth) accesses(instructions []model.Instruction) []workload.
 }
 
 func (truth programTruth) branches(instructions []model.Instruction) []workload.BranchOutcome {
+	if truth.explicit != nil {
+		branches := make([]workload.BranchOutcome, 0, len(truth.explicit.branches))
+		for _, branch := range truth.explicit.branches {
+			branches = append(branches, workload.BranchOutcome{
+				BranchID: instructions[branch.instruction].ID,
+				Taken:    branch.taken,
+				Target:   instructions[branch.instruction].Target,
+			})
+		}
+		return branches
+	}
 	if !truth.branching {
 		return make([]workload.BranchOutcome, 0)
 	}
