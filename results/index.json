@@ -41,6 +41,23 @@
         ]
       },
       "formal_report": "runs/2026-08-04-linux-learnexec-metal-01-e09c65a-hotspot-02/formal/REPORT.md"
+    },
+    {
+      "run_id": "2026-08-13-linux-aws-metal-03eb789-cq3-structure-specialization-04",
+      "path": "runs/2026-08-13-linux-aws-metal-03eb789-cq3-structure-specialization-04",
+      "status": "complete",
+      "run_classes": [
+        "pilot",
+        "formal"
+      ],
+      "source_commit": "03eb7898067393a95f1cb52778074539816e106c",
+      "storage": {
+        "mode": "external_archive",
+        "archive_path": "archives/2026-08-13-linux-aws-metal-03eb789-cq3-structure-specialization-04.tar.gz",
+        "archive_size_bytes": 15245238,
+        "archive_sha256": "b0f468f11179d9043f81bd0aaa0494df3aaaf67a4fa938a8e60ec580462557c5"
+      },
+      "formal_report": "runs/2026-08-13-linux-aws-metal-03eb789-cq3-structure-specialization-04/formal/analysis/REPORT.md"
     }
   ]
 }
