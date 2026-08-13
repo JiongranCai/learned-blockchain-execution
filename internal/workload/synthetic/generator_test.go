@@ -434,6 +434,52 @@ func TestStagedFanInBuildsParallelProducerWaves(t *testing.T) {
 	}
 }
 
+func TestFanInFanOutSharesOneExactProducerBarrier(t *testing.T) {
+	const fanIn = 5
+	config := synthetic.Config{
+		Seed:                 103,
+		InitialKeys:          18,
+		KeySpace:             18,
+		BlockCount:           1,
+		TransactionsPerBlock: 18,
+		MaxComputeUnits:      1,
+		TransactionMaxUnits:  9,
+		ProgramShape:         synthetic.ProgramShapeFanInFanOut,
+		FanIn:                fanIn,
+	}
+	artifact, err := synthetic.Generate(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := artifact.NewState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := executeArtifact(t, artifact.OrderedBlocks, state)
+	for index, transaction := range results[0].Transactions {
+		truth := artifact.GroundTruth[index]
+		if index < fanIn {
+			if len(transaction.Reads) != 1 || len(truth.Accesses) != 2 {
+				t.Fatalf("producer %d has unexpected accesses: result=%#v truth=%#v", index, transaction, truth)
+			}
+			want := fmt.Sprintf("key-%08d", index)
+			if string(truth.Accesses[0].Key) != want || string(truth.Accesses[1].Key) != want {
+				t.Fatalf("producer %d does not own key %q: %#v", index, want, truth.Accesses)
+			}
+			continue
+		}
+		if len(transaction.Reads) != fanIn || len(truth.Accesses) != fanIn+1 {
+			t.Fatalf("consumer %d does not read the producer prefix: result=%#v truth=%#v", index, transaction, truth)
+		}
+		for predecessor := 0; predecessor < fanIn; predecessor++ {
+			want := fmt.Sprintf("key-%08d", predecessor)
+			if string(transaction.Reads[predecessor].Key) != want || string(truth.Accesses[predecessor].Key) != want {
+				t.Fatalf("consumer %d read %q, want %q", index, truth.Accesses[predecessor].Key, want)
+			}
+		}
+	}
+}
+
 func TestGenerateRejectsInvalidConfig(t *testing.T) {
 	valid := testConfig()
 	tests := []struct {

@@ -17,9 +17,9 @@ PROFILES = (
     {"kind": "selective", "name": "selective02", "width": 2},
     {"kind": "selective", "name": "selective08", "width": 8},
     {"kind": "selective", "name": "selective32", "width": 32},
-    {"kind": "fanin", "name": "fanin02", "width": 2},
-    {"kind": "fanin", "name": "fanin08", "width": 8},
-    {"kind": "fanin", "name": "fanin32", "width": 32},
+    {"kind": "fanout", "name": "fanout08", "width": 8},
+    {"kind": "fanout", "name": "fanout32", "width": 32},
+    {"kind": "fanout", "name": "fanout128", "width": 128},
 )
 
 
@@ -155,8 +155,8 @@ def synthetic_workload(profile, compute_units, seed):
                 "initial_keys": 1024,
                 "key_space": 1024,
                 "transaction_max_units": compute_units + profile["width"] + 3,
-                "program_shape": "staged_fan_in",
-                "stage_fan_in": profile["width"],
+                "program_shape": "fan_in_fan_out",
+                "fan_in": profile["width"],
             }
         )
     return common
@@ -236,9 +236,9 @@ This run targets the workloads needed to distinguish the current CQ3 choices.
 - `selective_read_set` (2/8/32 candidates): the program exposes all candidate
   reads, executes one state-selected read, and has an exact concrete write key.
   This isolates false static read dependencies versus write estimates.
-- `staged_fan_in` (2/8/32 producers): independent producer waves feed one
-  consumer; the next wave starts from the prior consumer. The max-RAW prefix
-  is therefore an exact wave barrier, not an artificial serialization.
+- `fan_in_fan_out` (8/32/128 producers): one producer prefix feeds every
+  remaining independent consumer. The max-RAW prefix is an exact shared
+  barrier; summary stores one predecessor per consumer where Direct stores N.
 - Fixed compute costs: 1,000 and 100,000 units; two seeds; two 512-tx blocks.
 
 ## Controls and plans

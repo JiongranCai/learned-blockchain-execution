@@ -38,6 +38,7 @@ var (
 	ErrInvalidReadWriteCorrelation = errors.New("read_write_same_key_probability must be in [0, 1]")
 	ErrInvalidSelectiveReadCount   = errors.New("selective_read_set requires branch_read_candidates in [2, key_space]")
 	ErrInvalidStageFanIn           = errors.New("staged_fan_in requires stage_fan_in in [2, transactions_per_block-1]")
+	ErrInvalidFanIn                = errors.New("fan_in_fan_out requires fan_in in [2, transactions_per_block-1]")
 	ErrStructuredKeySpace          = errors.New("staged_fan_in requires one key per generated transaction")
 	ErrStructuredDistribution      = errors.New("structured program shapes do not accept access_distribution")
 	ErrUnexpectedShapeParameter    = errors.New("program shape parameter is set for an incompatible shape")
@@ -47,6 +48,7 @@ const (
 	ProgramShapeStateDependentBranch = "state_dependent_branch"
 	ProgramShapeSelectiveReadSet     = "selective_read_set"
 	ProgramShapeStagedFanIn          = "staged_fan_in"
+	ProgramShapeFanInFanOut          = "fan_in_fan_out"
 )
 
 type Config struct {
@@ -62,6 +64,7 @@ type Config struct {
 	ProgramShape         string                    `json:"program_shape,omitempty"`
 	BranchReadCandidates int                       `json:"branch_read_candidates,omitempty"`
 	StageFanIn           int                       `json:"stage_fan_in,omitempty"`
+	FanIn                int                       `json:"fan_in,omitempty"`
 	AccessDistribution   *AccessDistributionConfig `json:"access_distribution,omitempty"`
 }
 
@@ -170,6 +173,14 @@ func Generate(config Config) (workload.Artifact, error) {
 					delta,
 					computeUnits,
 				)
+			case ProgramShapeFanInFanOut:
+				instructions, branchTruth = fanInFanOutProgram(
+					transactionIndex,
+					globalTransaction,
+					config.FanIn,
+					delta,
+					computeUnits,
+				)
 			}
 			if willFail {
 				instructions = append(instructions, model.Instruction{
@@ -251,7 +262,8 @@ func validateConfig(config Config) error {
 	if config.ProgramShape != "" &&
 		config.ProgramShape != ProgramShapeStateDependentBranch &&
 		config.ProgramShape != ProgramShapeSelectiveReadSet &&
-		config.ProgramShape != ProgramShapeStagedFanIn {
+		config.ProgramShape != ProgramShapeStagedFanIn &&
+		config.ProgramShape != ProgramShapeFanInFanOut {
 		return ErrInvalidProgramShape
 	}
 	if (config.ProgramShape == ProgramShapeStateDependentBranch || config.ProgramShape == ProgramShapeSelectiveReadSet) &&
@@ -262,7 +274,7 @@ func validateConfig(config Config) error {
 		if config.BranchReadCandidates < 2 || config.BranchReadCandidates > config.KeySpace {
 			return ErrInvalidSelectiveReadCount
 		}
-		if config.StageFanIn != 0 {
+		if config.StageFanIn != 0 || config.FanIn != 0 {
 			return ErrUnexpectedShapeParameter
 		}
 	} else if config.BranchReadCandidates != 0 {
@@ -275,10 +287,25 @@ func validateConfig(config Config) error {
 		if config.BlockCount > config.KeySpace/config.TransactionsPerBlock {
 			return ErrStructuredKeySpace
 		}
+		if config.FanIn != 0 {
+			return ErrUnexpectedShapeParameter
+		}
 	} else if config.StageFanIn != 0 {
 		return ErrUnexpectedShapeParameter
 	}
-	if (config.ProgramShape == ProgramShapeSelectiveReadSet || config.ProgramShape == ProgramShapeStagedFanIn) &&
+	if config.ProgramShape == ProgramShapeFanInFanOut {
+		if config.FanIn < 2 || config.FanIn >= config.TransactionsPerBlock {
+			return ErrInvalidFanIn
+		}
+		if config.BlockCount > config.KeySpace/config.TransactionsPerBlock {
+			return ErrStructuredKeySpace
+		}
+	} else if config.FanIn != 0 {
+		return ErrUnexpectedShapeParameter
+	}
+	if (config.ProgramShape == ProgramShapeSelectiveReadSet ||
+		config.ProgramShape == ProgramShapeStagedFanIn ||
+		config.ProgramShape == ProgramShapeFanInFanOut) &&
 		config.AccessDistribution != nil {
 		return ErrStructuredDistribution
 	}
@@ -297,6 +324,8 @@ func validateConfig(config Config) error {
 		minimumUnits = config.MaxComputeUnits + uint64(config.BranchReadCandidates) + 5
 	} else if config.ProgramShape == ProgramShapeStagedFanIn {
 		minimumUnits = config.MaxComputeUnits + uint64(config.StageFanIn) + 3
+	} else if config.ProgramShape == ProgramShapeFanInFanOut {
+		minimumUnits = config.MaxComputeUnits + uint64(config.FanIn) + 3
 	}
 	if config.TransactionMaxUnits < minimumUnits {
 		return ErrInvalidTransactionBudget
@@ -333,7 +362,9 @@ func validateAccessDistribution(config Config) error {
 }
 
 func generatorVersion(config Config) string {
-	if config.ProgramShape == ProgramShapeSelectiveReadSet || config.ProgramShape == ProgramShapeStagedFanIn {
+	if config.ProgramShape == ProgramShapeSelectiveReadSet ||
+		config.ProgramShape == ProgramShapeStagedFanIn ||
+		config.ProgramShape == ProgramShapeFanInFanOut {
 		return GeneratorVersionV3
 	}
 	if config.AccessDistribution != nil || config.MinComputeUnits != 0 {
@@ -564,6 +595,56 @@ func stagedFanInProgram(
 	instructions := make([]model.Instruction, 0, fanIn+2)
 	readIndices := make([]int, 0, fanIn)
 	for predecessor := globalTransaction - fanIn; predecessor < globalTransaction; predecessor++ {
+		readIndices = append(readIndices, len(instructions))
+		register := fmt.Sprintf("fanin-%d", predecessor)
+		if len(readIndices) == 1 {
+			register = "value"
+		}
+		instructions = append(instructions, model.Instruction{
+			Op:       model.OpRead,
+			Key:      stateKey(predecessor),
+			Register: register,
+		})
+	}
+	instructions = append(instructions,
+		model.Instruction{Op: model.OpCompute, ComputeUnits: computeUnits},
+		model.Instruction{
+			Op:  model.OpWrite,
+			Key: writeKey,
+			Expression: model.Expression{
+				Base:  model.Register("value"),
+				Delta: delta,
+			},
+		},
+	)
+	writeIndex := len(instructions) - 1
+	path := make([]int, len(instructions))
+	for index := range path {
+		path[index] = index
+	}
+	return instructions, programTruth{explicit: &explicitProgramTruth{
+		path:   path,
+		reads:  readIndices,
+		writes: []int{writeIndex},
+	}}
+}
+
+func fanInFanOutProgram(
+	transactionIndex int,
+	globalTransaction int,
+	fanIn int,
+	delta int64,
+	computeUnits uint64,
+) ([]model.Instruction, programTruth) {
+	writeKey := stateKey(globalTransaction)
+	if transactionIndex < fanIn {
+		return flatProgram(writeKey, writeKey, delta, computeUnits)
+	}
+
+	blockBase := globalTransaction - transactionIndex
+	instructions := make([]model.Instruction, 0, fanIn+2)
+	readIndices := make([]int, 0, fanIn)
+	for predecessor := blockBase; predecessor < blockBase+fanIn; predecessor++ {
 		readIndices = append(readIndices, len(instructions))
 		register := fmt.Sprintf("fanin-%d", predecessor)
 		if len(readIndices) == 1 {
