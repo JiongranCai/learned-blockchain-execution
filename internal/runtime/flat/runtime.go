@@ -92,26 +92,39 @@ func (r *Runtime) Execute(
 	return r.ExecuteWithHooks(ctx, control.TxContext{
 		TransactionID: tx.ID,
 		TxIndex:       index,
-	}, tx, view, policy.RuntimeDefaults{})
+	}, tx, view, policy.RuntimeDefaults{}, nil)
 }
 
 // ExecuteWithHooks runs the same deterministic semantics through the shared
 // typed runtime-policy seam. Hooks may observe/select the current baseline
 // access/branch actions but cannot directly mutate state.
+// ExecuteWithHooks runs a transaction. abandoned, when not nil, receives the
+// partial result if execution unwinds through a panic. An engine that discards
+// an attempt from inside a hook needs this to account for the work the attempt
+// consumed; without it an abandoned attempt is charged as zero work.
 func (r *Runtime) ExecuteWithHooks(
 	ctx context.Context,
 	execution control.TxContext,
 	tx model.Transaction,
 	view *state.Overlay,
 	hooks policy.RuntimeHooks,
-) model.TxResult {
+	abandoned *model.TxResult,
+) (result model.TxResult) {
+	if abandoned != nil {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				*abandoned = result
+				panic(recovered)
+			}
+		}()
+	}
 	if hooks == nil {
 		hooks = policy.RuntimeDefaults{}
 	}
 	if execution.TransactionID == "" {
 		execution.TransactionID = tx.ID
 	}
-	result := model.TxResult{
+	result = model.TxResult{
 		Index:         execution.TxIndex,
 		TransactionID: tx.ID,
 		ComputeDigest: initialComputeDigest,

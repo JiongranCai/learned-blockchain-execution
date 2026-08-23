@@ -155,7 +155,12 @@ func TestDependencyTelemetrySeparatesAcquisitionRepresentationAndUse(t *testing.
 					DependencySource:                testCase.information,
 					DependencyRepresentation:        testCase.representation,
 					DependencyRepresentationBuilder: testCase.builder,
-					TraceMode:                       control.TraceCounters,
+					// This test asserts the separation of the dependency stage
+					// counters, which are produced by the in-callback gate.
+					// ready_queue dispatch charges the scheduler instead and is
+					// covered by the kernel policy tests.
+					DependencyDispatch: control.DependencyDispatchIndexOrder,
+					TraceMode:          control.TraceCounters,
 				},
 			)
 			if err != nil {

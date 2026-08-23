@@ -1,5 +1,5 @@
 {
-  "schema_version": "experiment-matrix-v6",
+  "schema_version": "experiment-matrix-v7",
   "statistical_protocol": "configs/statistical/protocol-v1.json",
   "order_seed": 20260811,
   "timeout": "2m",

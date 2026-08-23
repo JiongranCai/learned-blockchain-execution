@@ -19,7 +19,7 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/workload/synthetic"
 )
 
-const ConfigSchemaVersion = "experiment-matrix-v6"
+const ConfigSchemaVersion = "experiment-matrix-v7"
 
 var ErrInvalidConfig = errors.New("invalid experiment config")
 
@@ -56,7 +56,13 @@ type CaseConfig struct {
 	DependencyRepresentationBuilder control.DependencyRepresentationBuilder `json:"dependency_representation_builder"`
 	DependencyWaitPolicy            control.DependencyWaitPolicy            `json:"dependency_wait_policy"`
 	DependencyEstimateInjection     control.DependencyEstimateInjection     `json:"dependency_estimate_injection"`
-	TraceMode                       control.TraceMode                       `json:"trace_mode"`
+	// DependencyDispatch, EstimateReadPolicy and IdleWaitPolicy expose the
+	// Block-STM kernel blocking behaviours that upstream hard-codes. The
+	// frozen upstream kernel is index_order/suspend_in_place/gosched.
+	DependencyDispatch control.DependencyDispatchPolicy `json:"dependency_dispatch"`
+	EstimateReadPolicy control.EstimateReadPolicy       `json:"estimate_read_policy"`
+	IdleWaitPolicy     control.IdleWaitPolicy           `json:"idle_wait_policy"`
+	TraceMode          control.TraceMode                `json:"trace_mode"`
 }
 
 func (c CaseConfig) TelemetryCase() telemetry.Case {
@@ -73,6 +79,9 @@ func (c CaseConfig) TelemetryCase() telemetry.Case {
 		DependencyRepresentationBuilder: c.DependencyRepresentationBuilder,
 		DependencyWaitPolicy:            c.DependencyWaitPolicy,
 		DependencyEstimateInjection:     c.DependencyEstimateInjection,
+		DependencyDispatch:              c.DependencyDispatch,
+		EstimateReadPolicy:              c.EstimateReadPolicy,
+		IdleWaitPolicy:                  c.IdleWaitPolicy,
 		TraceMode:                       c.TraceMode,
 	}
 }
@@ -128,7 +137,10 @@ func SchemaHash(schemaVersion string) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func (c Config) validate() (time.Duration, error) {
+// validate checks every contract the runner depends on and normalises the
+// resolved kernel policy back into each case, so identity, the validation
+// bundle and run records name the behaviour that actually executes.
+func (c *Config) validate() (time.Duration, error) {
 	invalid := func(format string, args ...any) (time.Duration, error) {
 		return 0, fmt.Errorf("%w: %s", ErrInvalidConfig, fmt.Sprintf(format, args...))
 	}
@@ -179,7 +191,7 @@ func (c Config) validate() (time.Duration, error) {
 		return invalid("at least one case is required")
 	}
 	caseIDs := make(map[string]CaseConfig, len(c.Cases))
-	for _, experimentCase := range c.Cases {
+	for caseIndex, experimentCase := range c.Cases {
 		if experimentCase.ID == "" || experimentCase.Engine == "" || experimentCase.Policy == "" {
 			return invalid("case id, engine, and policy are required")
 		}
@@ -220,6 +232,35 @@ func (c Config) validate() (time.Duration, error) {
 		})
 		if dependencyErr != nil {
 			return invalid("case %q has illegal dependency plan: %v", experimentCase.ID, dependencyErr)
+		}
+		if experimentCase.DependencyDispatch != "" &&
+			!control.ValidDependencyDispatchPolicy(experimentCase.DependencyDispatch) {
+			return invalid("case %q has invalid dependency_dispatch %q", experimentCase.ID, experimentCase.DependencyDispatch)
+		}
+		if experimentCase.EstimateReadPolicy != "" &&
+			!control.ValidEstimateReadPolicy(experimentCase.EstimateReadPolicy) {
+			return invalid("case %q has invalid estimate_read_policy %q", experimentCase.ID, experimentCase.EstimateReadPolicy)
+		}
+		if experimentCase.IdleWaitPolicy != "" &&
+			!control.ValidIdleWaitPolicy(experimentCase.IdleWaitPolicy) {
+			return invalid("case %q has invalid idle_wait_policy %q", experimentCase.ID, experimentCase.IdleWaitPolicy)
+		}
+		kernelPlan, kernelErr := engineapi.EffectiveKernelControl(engineapi.RunConfig{
+			MaxSpeculativeInflight: experimentCase.MaxSpeculativeInflight,
+			DependencyDispatch:     experimentCase.DependencyDispatch,
+			EstimateReadPolicy:     experimentCase.EstimateReadPolicy,
+			IdleWaitPolicy:         experimentCase.IdleWaitPolicy,
+		}, dependencyPlan)
+		if kernelErr != nil {
+			return invalid("case %q has illegal kernel policy: %v", experimentCase.ID, kernelErr)
+		}
+		// Record the resolved plan so case identity, the validation bundle and
+		// every run record name the behaviour that actually executed.
+		c.Cases[caseIndex].DependencyDispatch = kernelPlan.Dispatch
+		c.Cases[caseIndex].EstimateReadPolicy = kernelPlan.EstimateRead
+		c.Cases[caseIndex].IdleWaitPolicy = kernelPlan.IdleWait
+		if experimentCase.Engine == "serial" && !kernelPlan.IsFrozenDefault() {
+			return invalid("serial case %q must use the frozen kernel policy", experimentCase.ID)
 		}
 		if !control.ValidTraceMode(experimentCase.TraceMode) {
 			return invalid("case %q has invalid trace_mode %q", experimentCase.ID, experimentCase.TraceMode)
@@ -270,7 +311,10 @@ func (c Config) validate() (time.Duration, error) {
 			off.DependencyRepresentation != instrumented.DependencyRepresentation ||
 			off.DependencyRepresentationBuilder != instrumented.DependencyRepresentationBuilder ||
 			off.DependencyWaitPolicy != instrumented.DependencyWaitPolicy ||
-			off.DependencyEstimateInjection != instrumented.DependencyEstimateInjection {
+			off.DependencyEstimateInjection != instrumented.DependencyEstimateInjection ||
+			off.DependencyDispatch != instrumented.DependencyDispatch ||
+			off.EstimateReadPolicy != instrumented.EstimateReadPolicy ||
+			off.IdleWaitPolicy != instrumented.IdleWaitPolicy {
 			return invalid("telemetry ablation cases may differ only by trace mode and id")
 		}
 		for _, platform := range c.TelemetryAblation.EnforcePlatforms {

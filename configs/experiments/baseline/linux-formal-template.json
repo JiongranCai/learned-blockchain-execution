@@ -1,5 +1,5 @@
 {
-  "schema_version": "experiment-matrix-v6",
+  "schema_version": "experiment-matrix-v7",
   "run_class": "formal",
   "workload": {
     "synthetic": {

@@ -13,7 +13,7 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/workload"
 )
 
-const ValidationBundleSchemaVersion = "validation-bundle-v6"
+const ValidationBundleSchemaVersion = "validation-bundle-v7"
 
 var (
 	ErrInvalidValidationBundle = errors.New("invalid validation bundle")
@@ -32,6 +32,9 @@ type ValidatedCase struct {
 	DependencyRepresentationBuilder control.DependencyRepresentationBuilder `json:"dependency_representation_builder"`
 	DependencyWaitPolicy            control.DependencyWaitPolicy            `json:"dependency_wait_policy"`
 	DependencyEstimateInjection     control.DependencyEstimateInjection     `json:"dependency_estimate_injection"`
+	DependencyDispatch              control.DependencyDispatchPolicy        `json:"dependency_dispatch"`
+	EstimateReadPolicy              control.EstimateReadPolicy              `json:"estimate_read_policy"`
+	IdleWaitPolicy                  control.IdleWaitPolicy                  `json:"idle_wait_policy"`
 }
 
 type ValidationBundle struct {
@@ -87,6 +90,9 @@ func Validate(ctx context.Context, loaded LoadedConfig) (ValidationBundle, error
 		DependencyRepresentationBuilder: control.DependencyRepresentationBuilderNone,
 		DependencyWaitPolicy:            control.DependencyWaitNone,
 		DependencyEstimateInjection:     control.DependencyEstimatesDisabled,
+		DependencyDispatch:              control.DependencyDispatchIndexOrder,
+		EstimateReadPolicy:              control.EstimateReadSuspendInPlace,
+		IdleWaitPolicy:                  control.IdleWaitGosched,
 		TraceMode:                       control.TraceOff,
 	}
 	oracleContext, cancel := context.WithTimeout(ctx, loaded.Timeout)
@@ -145,6 +151,9 @@ func Validate(ctx context.Context, loaded LoadedConfig) (ValidationBundle, error
 				DependencyRepresentationBuilder: experimentCase.DependencyRepresentationBuilder,
 				DependencyWaitPolicy:            experimentCase.DependencyWaitPolicy,
 				DependencyEstimateInjection:     experimentCase.DependencyEstimateInjection,
+				DependencyDispatch:              experimentCase.DependencyDispatch,
+				EstimateReadPolicy:              experimentCase.EstimateReadPolicy,
+				IdleWaitPolicy:                  experimentCase.IdleWaitPolicy,
 			})
 		}
 	}
@@ -446,7 +455,10 @@ func bundleHasCase(bundle ValidationBundle, experimentCase CaseConfig) bool {
 			candidate.DependencyRepresentation == experimentCase.DependencyRepresentation &&
 			candidate.DependencyRepresentationBuilder == experimentCase.DependencyRepresentationBuilder &&
 			candidate.DependencyWaitPolicy == experimentCase.DependencyWaitPolicy &&
-			candidate.DependencyEstimateInjection == experimentCase.DependencyEstimateInjection {
+			candidate.DependencyEstimateInjection == experimentCase.DependencyEstimateInjection &&
+			candidate.DependencyDispatch == experimentCase.DependencyDispatch &&
+			candidate.EstimateReadPolicy == experimentCase.EstimateReadPolicy &&
+			candidate.IdleWaitPolicy == experimentCase.IdleWaitPolicy {
 			return true
 		}
 	}

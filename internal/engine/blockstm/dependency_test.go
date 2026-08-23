@@ -70,7 +70,7 @@ func TestStaticDependencyRepresentationsShareAcquiredInformation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		preparation, err := prepareDependency(context.Background(), block, plan, 0, true)
+		preparation, err := prepareDependency(context.Background(), block, plan, frozenKernelPlan(), 0, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -110,7 +110,7 @@ func TestCQ3IAcquisitionIsolation(t *testing.T) {
 		context.Background(), block, dependencyTestPlan(
 			control.DependencyMVCCRuntime, control.DependencySourceRuntimeObserved,
 			control.DependencyRepresentationVersionOnly, control.DependencyRepresentationBuilderNone,
-		), 0, true,
+		), frozenKernelPlan(), 0, true,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +127,7 @@ func TestCQ3IAcquisitionIsolation(t *testing.T) {
 		context.Background(), block, dependencyTestPlan(
 			control.DependencyMVCCRuntime, control.DependencySourceStaticProgram,
 			control.DependencyRepresentationVersionOnly, control.DependencyRepresentationBuilderNone,
-		), 0, true,
+		), frozenKernelPlan(), 0, true,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -170,6 +170,7 @@ func TestCQ3RRepresentationIsolation(t *testing.T) {
 			preparation, err := prepareDependency(
 				context.Background(), block,
 				dependencyTestPlan(control.DependencyMVCCRuntime, control.DependencySourceStaticProgram, testCase.representation, testCase.builder),
+				frozenKernelPlan(),
 				0, true,
 			)
 			if err != nil {
@@ -233,13 +234,42 @@ func TestCQ3UConsumersAreIndependent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			preparation, err := prepareDependency(context.Background(), block, plan, 0, true)
+			// Consumer independence is a property of the resolved plan, not of
+			// where the gate runs, so it is checked under both dispatch forms.
+			// index_order charges the in-callback controller; ready_queue
+			// charges the scheduler instead and must leave the gate unbuilt.
+			kernelPlan, err := engineapi.EffectiveKernelControl(engineapi.RunConfig{
+				DependencyDispatch: control.DependencyDispatchIndexOrder,
+			}, plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			preparation, err := prepareDependency(context.Background(), block, plan, kernelPlan, 0, true)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if (preparation.controller != nil) != testCase.wantGate ||
 				(len(preparation.estimates) > 0) != testCase.wantEstimates {
 				t.Fatalf("consumer coupling mismatch: %#v", preparation)
+			}
+			if testCase.wantGate {
+				readyPlan, err := engineapi.EffectiveKernelControl(engineapi.RunConfig{
+					DependencyDispatch: control.DependencyDispatchReadyQueue,
+				}, plan)
+				if err != nil {
+					t.Fatal(err)
+				}
+				readyPreparation, err := prepareDependency(context.Background(), block, plan, readyPlan, 0, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if readyPreparation.controller != nil {
+					t.Fatalf("ready_queue dispatch must not also build an in-callback gate: %#v", readyPreparation)
+				}
+				if len(readyPreparation.kernelPolicy.Predecessors) == 0 &&
+					len(readyPreparation.kernelPolicy.Barriers) == 0 {
+					t.Fatalf("ready_queue dispatch must carry the gate into the scheduler: %#v", readyPreparation)
+				}
 			}
 			counters := preparation.Counters(2, 17)
 			if counters.WaitPolicy != testCase.wait || counters.EstimateInjection != testCase.estimates {
@@ -277,6 +307,16 @@ func TestIndexedFullConflictGraphMatchesQuadraticReference(t *testing.T) {
 	}
 	if gotEdges != wantEdges || !reflect.DeepEqual(got, want) || units == 0 {
 		t.Fatalf("indexed graph differs: got=%v/%d want=%v/%d units=%d", got, gotEdges, want, wantEdges, units)
+	}
+}
+
+// frozenKernelPlan is the resolved kernel policy that reproduces the frozen
+// upstream Block-STM kernel.
+func frozenKernelPlan() engineapi.KernelPlan {
+	return engineapi.KernelPlan{
+		EstimateRead: control.EstimateReadSuspendInPlace,
+		IdleWait:     control.IdleWaitGosched,
+		Dispatch:     control.DependencyDispatchIndexOrder,
 	}
 }
 

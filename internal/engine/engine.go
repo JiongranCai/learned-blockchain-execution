@@ -18,6 +18,7 @@ var (
 	ErrInvalidWorkers          = errors.New("invalid executor count")
 	ErrInvalidSpeculationLimit = errors.New("invalid max speculative inflight")
 	ErrInvalidDependencyMode   = errors.New("invalid dependency control")
+	ErrInvalidKernelPolicy     = errors.New("invalid kernel execution policy")
 	ErrUnsupported             = errors.New("policy decision is unsupported by engine")
 )
 
@@ -38,7 +39,92 @@ type RunConfig struct {
 	DependencyRepresentationBuilder control.DependencyRepresentationBuilder
 	DependencyWaitPolicy            control.DependencyWaitPolicy
 	DependencyEstimateInjection     control.DependencyEstimateInjection
-	OmitResultDigest                bool
+	// DependencyDispatch selects whether a static dependency representation is
+	// consumed by an in-callback wait (frozen behaviour) or by deferring the
+	// dispatch until the transaction is ready.
+	DependencyDispatch control.DependencyDispatchPolicy
+	// EstimateReadPolicy and IdleWaitPolicy expose the two frozen Block-STM
+	// blocking behaviours. Zero values reproduce the frozen kernel exactly.
+	EstimateReadPolicy control.EstimateReadPolicy
+	IdleWaitPolicy     control.IdleWaitPolicy
+	OmitResultDigest   bool
+}
+
+// KernelPlan is the resolved Block-STM kernel policy for a run.
+type KernelPlan struct {
+	EstimateRead control.EstimateReadPolicy
+	IdleWait     control.IdleWaitPolicy
+	Dispatch     control.DependencyDispatchPolicy
+}
+
+// IsFrozenDefault reports whether the plan reproduces the frozen upstream
+// kernel, in which case the engine uses the untouched upstream entry point.
+func (p KernelPlan) IsFrozenDefault() bool {
+	return p.EstimateRead == control.EstimateReadSuspendInPlace &&
+		p.IdleWait == control.IdleWaitGosched &&
+		p.Dispatch == control.DependencyDispatchIndexOrder
+}
+
+// EffectiveKernelControl resolves and validates the kernel policy. Ready-queue
+// dispatch needs a wait consumer to describe which transactions are not ready,
+// and it cannot be combined with a finite speculation window because the
+// admission limiter keeps separate stable-frontier bookkeeping.
+func EffectiveKernelControl(config RunConfig, dependency DependencyPlan) (KernelPlan, error) {
+	// An omitted field resolves to the behaviour that matches what a dependency
+	// DAG actually describes: do not dispatch a transaction that is not ready,
+	// and free the worker of a transaction that cannot proceed. Where that
+	// behaviour is unavailable the omitted field falls back to the frozen
+	// upstream value and the resolved plan is recorded. An explicit field is
+	// never downgraded; an illegal explicit combination is refused.
+	finiteWindow := config.MaxSpeculativeInflight > 0
+	waitConsumer := dependency.WaitPolicy != control.DependencyWaitNone
+
+	estimateRead := config.EstimateReadPolicy
+	if estimateRead == "" {
+		estimateRead = control.EstimateReadAbortReschedule
+		if finiteWindow {
+			estimateRead = control.EstimateReadSuspendInPlace
+		}
+	}
+	if !control.ValidEstimateReadPolicy(estimateRead) {
+		return KernelPlan{}, fmt.Errorf("%w: unknown estimate read policy %q", ErrInvalidKernelPolicy, estimateRead)
+	}
+
+	dispatch := config.DependencyDispatch
+	if dispatch == "" {
+		dispatch = control.DependencyDispatchIndexOrder
+		if waitConsumer && !finiteWindow {
+			dispatch = control.DependencyDispatchReadyQueue
+		}
+	}
+	if !control.ValidDependencyDispatchPolicy(dispatch) {
+		return KernelPlan{}, fmt.Errorf("%w: unknown dispatch policy %q", ErrInvalidKernelPolicy, dispatch)
+	}
+	if dispatch == control.DependencyDispatchReadyQueue && !waitConsumer {
+		return KernelPlan{}, fmt.Errorf("%w: ready_queue dispatch requires a dependency wait consumer", ErrInvalidKernelPolicy)
+	}
+
+	idleWait := config.IdleWaitPolicy
+	if idleWait == "" {
+		idleWait = control.IdleWaitPark
+		if finiteWindow && estimateRead != control.EstimateReadSuspendYieldWorker {
+			idleWait = control.IdleWaitGosched
+		}
+	}
+	if !control.ValidIdleWaitPolicy(idleWait) {
+		return KernelPlan{}, fmt.Errorf("%w: unknown idle wait policy %q", ErrInvalidKernelPolicy, idleWait)
+	}
+	if estimateRead == control.EstimateReadSuspendYieldWorker && idleWait != control.IdleWaitPark {
+		// Yielding a worker is pointless while freed workers busy-wait. An
+		// explicit value is refused rather than rewritten.
+		return KernelPlan{}, fmt.Errorf("%w: suspend_yield_worker requires idle_wait=park", ErrInvalidKernelPolicy)
+	}
+
+	plan := KernelPlan{EstimateRead: estimateRead, IdleWait: idleWait, Dispatch: dispatch}
+	if !plan.IsFrozenDefault() && finiteWindow {
+		return KernelPlan{}, fmt.Errorf("%w: a finite speculation window is unavailable under a non-default kernel policy", ErrInvalidKernelPolicy)
+	}
+	return plan, nil
 }
 
 type DependencyPlan struct {

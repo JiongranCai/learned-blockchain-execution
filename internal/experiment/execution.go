@@ -96,6 +96,9 @@ func Execute(ctx context.Context, artifact workload.Artifact, experimentCase Cas
 			DependencyRepresentationBuilder: experimentCase.DependencyRepresentationBuilder,
 			DependencyWaitPolicy:            experimentCase.DependencyWaitPolicy,
 			DependencyEstimateInjection:     experimentCase.DependencyEstimateInjection,
+			DependencyDispatch:              experimentCase.DependencyDispatch,
+			EstimateReadPolicy:              experimentCase.EstimateReadPolicy,
+			IdleWaitPolicy:                  experimentCase.IdleWaitPolicy,
 			OmitResultDigest:                omitDigest,
 		})
 		elapsed := uint64(time.Since(started))

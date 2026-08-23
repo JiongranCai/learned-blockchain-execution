@@ -73,6 +73,10 @@ func (e *Engine) ExecuteBlock(
 	if err != nil {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, err
 	}
+	kernelPlan, err := engineapi.EffectiveKernelControl(config, dependencyPlan)
+	if err != nil {
+		return model.BlockResult{}, control.Trace{Engine: engineName}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return model.BlockResult{}, control.Trace{Engine: engineName}, err
 	}
@@ -120,6 +124,7 @@ func (e *Engine) ExecuteBlock(
 		ctx,
 		block,
 		dependencyPlan,
+		kernelPlan,
 		e.stores[e.storeKey],
 		traceMode != control.TraceOff,
 	)
@@ -144,7 +149,7 @@ func (e *Engine) ExecuteBlock(
 			return
 		}
 		transaction := block.Transactions[transactionIndex]
-		incarnation := slots[transactionIndex].beginExecution()
+		incarnation, afterAbandon := slots[transactionIndex].beginExecution()
 		txContext := control.TxContext{
 			BlockID:       block.ID,
 			TransactionID: transaction.ID,
@@ -153,17 +158,26 @@ func (e *Engine) ExecuteBlock(
 		}
 
 		if incarnation > 0 {
-			failedContext := txContext
-			failedContext.Incarnation = incarnation - 1
-			failedContext.Ordinal = ^uint64(0)
-			dispatcher.OnValidationFail(control.FailureContext{
-				TxContext: failedContext,
-				Reason:    "read_set_changed",
-			})
+			if !afterAbandon {
+				// An abandoned attempt was discarded by the estimate-read
+				// policy, not by validation, so it must not be reported as a
+				// validation failure.
+				failedContext := txContext
+				failedContext.Incarnation = incarnation - 1
+				failedContext.Ordinal = ^uint64(0)
+				dispatcher.OnValidationFail(control.FailureContext{
+					TxContext: failedContext,
+					Reason:    "read_set_changed",
+				})
+			}
+			reason := "blockstm_reexecution"
+			if afterAbandon {
+				reason = "estimate_dependency_abort"
+			}
 			txContext.Ordinal = 1
 			dispatcher.OnReplayStart(control.ReplayContext{
 				TxContext: txContext,
-				Reason:    "blockstm_reexecution",
+				Reason:    reason,
 			})
 		}
 		txContext.Ordinal = 2
@@ -183,7 +197,18 @@ func (e *Engine) ExecuteBlock(
 
 		adapter := framedState{store: multiStore.GetKVStore(e.storeKey)}
 		view := state.NewOverlay(adapter)
-		txResult := e.runtime.ExecuteWithHooks(executionCtx, txContext, transaction, view, dispatcher)
+		// The kernel discards an attempt that read an ESTIMATE mark by
+		// unwinding through this callback. Charge the work it consumed before
+		// letting the panic continue, otherwise the attempt is accounted as
+		// zero and the cost of discarding it becomes invisible.
+		var abandoned model.TxResult
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slots[transactionIndex].abandon(incarnation, abandoned.UnitsUsed, traceMode != control.TraceOff)
+				panic(recovered)
+			}
+		}()
+		txResult := e.runtime.ExecuteWithHooks(executionCtx, txContext, transaction, view, dispatcher, &abandoned)
 		validationContext := txContext
 		validationContext.Ordinal = ^uint64(0) - 1
 		dispatcher.OnValidationPoint(control.ValidationContext{
@@ -203,7 +228,7 @@ func (e *Engine) ExecuteBlock(
 		dependency.controller.Complete(transactionIndex)
 	}
 
-	speculation, err := kernel.ExecuteBlockWithMaxSpeculativeInflightAndEstimates(
+	speculation, kernelStats, err := kernel.ExecuteBlockWithKernelPolicy(
 		executionCtx,
 		len(block.Transactions),
 		e.stores,
@@ -211,6 +236,7 @@ func (e *Engine) ExecuteBlock(
 		config.Executors,
 		config.MaxSpeculativeInflight,
 		dependency.estimates,
+		dependency.kernelPolicy,
 		txExecutor,
 	)
 	if executionErr := executionErrors.get(); executionErr != nil {
@@ -260,6 +286,7 @@ func (e *Engine) ExecuteBlock(
 		finalTrace.Work.PeakSpeculativeInflight = speculation.PeakInflight
 		finalTrace.Work.AdmissionStallEvents = speculation.AdmissionStallEvents
 		finalTrace.Work.AdmissionStallNS = speculation.AdmissionStallNS
+		finalTrace.Work.KernelPolicy = kernelPolicyCounters(kernelPlan, kernelStats)
 		for index := range slots {
 			addWorkCounters(&finalTrace.Work, slots[index].work())
 		}
@@ -276,15 +303,34 @@ type resultSlot struct {
 	executions   uint64
 	result       model.TxResult
 	ready        bool
+	abandoned    bool
 	attemptUnits []uint64
 }
 
-func (s *resultSlot) beginExecution() uint64 {
+// beginExecution reserves the next incarnation and reports whether the
+// previous attempt was abandoned rather than invalidated by validation.
+func (s *resultSlot) beginExecution() (uint64, bool) {
 	s.mu.Lock()
 	incarnation := s.executions
 	s.executions++
+	abandoned := s.abandoned
+	s.abandoned = false
 	s.mu.Unlock()
-	return incarnation
+	return incarnation, abandoned
+}
+
+// abandon records an attempt that was discarded before producing a result. The
+// units it consumed are still charged, so discarded work stays measurable.
+func (s *resultSlot) abandon(incarnation, units uint64, captureWork bool) {
+	s.mu.Lock()
+	s.abandoned = true
+	if captureWork {
+		for uint64(len(s.attemptUnits)) <= incarnation {
+			s.attemptUnits = append(s.attemptUnits, 0)
+		}
+		s.attemptUnits[incarnation] = units
+	}
+	s.mu.Unlock()
 }
 
 func (s *resultSlot) store(incarnation uint64, result model.TxResult, captureWork bool) {

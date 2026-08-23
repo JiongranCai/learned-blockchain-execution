@@ -176,7 +176,7 @@ def matrix(run_id, run_class, profile, compute_units, seed, expected_hash, selec
     warmups, measurements = (1, 3) if run_class == "smoke" else (3, 30)
     profile_index = next(index for index, value in enumerate(PROFILES) if value["name"] == profile["name"])
     value = {
-        "schema_version": "experiment-matrix-v6",
+        "schema_version": "experiment-matrix-v7",
         "run_class": run_class,
         "workload": workload(profile, compute_units, seed, expected_hash),
         "statistical_protocol": "configs/statistical/protocol-v1.json",

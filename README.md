@@ -18,9 +18,17 @@ The current implementation focuses on a reproducible motivation and systems-eval
   - `full_conflict_graph` has both a quadratic diagnostic builder and a correctness-equivalent key-indexed builder;
   - `dependency_wait_policy` independently selects no wait, direct-predecessor wait, contiguous-frontier wait, or all-predecessors wait;
   - `dependency_estimate_injection` independently enables or disables static write estimates;
+  - `dependency_dispatch` selects whether a wait consumer blocks inside the transaction callback (`index_order`, the frozen behaviour) or defers the dispatch until the transaction is ready (`ready_queue`);
   - legacy `declared_dag`, `summary`, and `full_graph` bundles remain available for historical reproduction, while new CQ3-R/U experiments use explicit stage controls.
+- Explicit Block-STM kernel blocking policies, added without modifying the frozen upstream kernel:
+  - `estimate_read_policy` selects the response to reading an ESTIMATE mark: `suspend_in_place` keeps the partial execution and the worker (frozen upstream behaviour), `abort_and_reschedule` discards the incarnation and frees the worker (Block-STM paper behaviour, the resolved default), and `suspend_yield_worker` keeps the partial execution while releasing the worker;
+  - `idle_wait_policy` selects whether a worker with no task busy-waits (`gosched`, frozen upstream behaviour) or parks until scheduler state changes (`park`, the resolved default). Parking matters precisely because the other two defaults do release workers: a freed worker with nothing to do would otherwise spin.
 - Differential validation against the serial oracle before a candidate can be benchmarked.
 - Schema-versioned experiment matrices, isolated worker processes, provenance records, action traces, and mechanism-specific telemetry.
+
+An omitted kernel policy resolves to the behaviour a dependency DAG actually describes: do not dispatch a transaction that is not ready, and free the worker of a transaction that cannot proceed. Where that behaviour is unavailable the omitted field falls back to the frozen upstream value, so a finite `max_speculative_inflight` still routes through the untouched upstream entry point. An explicit field is never downgraded; an illegal explicit combination is refused. The resolved plan is written into every case identity, validation bundle and run record.
+
+The policies change only when work happens, never what a block commits: preset transaction order, canonical read versions, mandatory MVCC validation, deterministic reexecution, and atomic publication are identical under every setting, and the differential suite requires complete canonical equality with the serial oracle for all of them.
 
 Static dependency information is treated only as an optimization hint. Guided modes preserve preset transaction order and retain Block-STM read-set validation, deterministic reexecution, and atomic final-state publication. Missing or imprecise guidance can reduce performance, but cannot bypass the correctness path.
 
@@ -41,7 +49,7 @@ internal/workload/           workload artifacts and generators
 scripts/                     verification, smoke-run, and summary tools
 ```
 
-Root-level Go files come from the frozen Block-STM substrate, except for explicitly additive integration files such as `speculation.go`. New framework code lives primarily under `internal/` so the upstream safety kernel remains auditable.
+Root-level Go files come from the frozen Block-STM substrate, except for explicitly additive integration files such as `speculation.go` and the `execpolicy*.go` kernel-policy extension. New framework code lives primarily under `internal/` so the upstream safety kernel remains auditable.
 
 ## Build and verify
 
@@ -74,12 +82,15 @@ Convenience scripts cover the implemented comparison families:
 ./scripts/run_dependency_guidance_smoke.sh
 ./scripts/run_dependency_representation_smoke.sh
 ./scripts/run_dependency_consumer_smoke.sh
+./scripts/run_kernel_policy_smoke.sh
 ./scripts/summarize_dependency_guidance.sh
 ```
 
 CQ3-I acquisition-only smoke matrices live under `configs/experiments/dependency-acquisition/`. They hold `dependency_mode=mvcc_runtime`, `max_speculative_inflight=W`, and every consumer fixed while comparing `runtime_observed` with `static_program` acquisition paid then discarded.
 
 CQ3-R representation-only matrices live under `configs/experiments/dependency-representation/`. They hold `dependency_source=static_program`, `dependency_mode=mvcc_runtime`, `max_speculative_inflight=W`, and every static consumer disabled while comparing the representation and builder fields.
+
+Kernel-policy matrices live under `configs/experiments/kernel-policy/`. They hold the source, representation, builder, `P=8`, and `L=W` fixed while changing exactly one blocking behaviour per contrast: the dependency dispatch policy for the wait consumers, and the estimate-read policy for write estimates.
 
 CQ3-U consumer-only matrices live under `configs/experiments/dependency-consumer/`. They hold the source, representation, builder, `P=8`, and `L=W` fixed within each matched contrast. Three pairs isolate direct, frontier, and all-predecessor waits with write estimates disabled; one additional RAW pair isolates write-estimate injection with waiting disabled. Runtime MVCC validation and whole-transaction reexecution remain mandatory in every cell.
 

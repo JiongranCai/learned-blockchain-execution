@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	BenchmarkRecordSchema  = "benchmark-run-v6"
-	ValidationRecordSchema = "validation-run-v6"
-	ActionTraceSchema      = "action-trace-v6"
+	BenchmarkRecordSchema  = "benchmark-run-v7"
+	ValidationRecordSchema = "validation-run-v7"
+	ActionTraceSchema      = "action-trace-v7"
 	AblationRecordSchema   = "telemetry-ablation-v1"
 )
 
@@ -29,6 +29,9 @@ type Case struct {
 	DependencyRepresentationBuilder control.DependencyRepresentationBuilder `json:"dependency_representation_builder"`
 	DependencyWaitPolicy            control.DependencyWaitPolicy            `json:"dependency_wait_policy"`
 	DependencyEstimateInjection     control.DependencyEstimateInjection     `json:"dependency_estimate_injection"`
+	DependencyDispatch              control.DependencyDispatchPolicy        `json:"dependency_dispatch"`
+	EstimateReadPolicy              control.EstimateReadPolicy              `json:"estimate_read_policy"`
+	IdleWaitPolicy                  control.IdleWaitPolicy                  `json:"idle_wait_policy"`
 	TraceMode                       control.TraceMode                       `json:"trace_mode"`
 }
 
@@ -90,35 +93,36 @@ type Timing struct {
 }
 
 type Metrics struct {
-	Blocks                        uint64                     `json:"blocks"`
-	Transactions                  uint64                     `json:"transactions"`
-	SuccessfulTransactions        uint64                     `json:"successful_transactions"`
-	FailedTransactions            uint64                     `json:"failed_transactions"`
-	UsefulExecutionUnits          uint64                     `json:"useful_execution_units"`
-	ReexecutedExecutionUnits      uint64                     `json:"reexecuted_execution_units"`
-	DiscardedExecutionUnits       uint64                     `json:"discarded_execution_units"`
-	ExecutionAttempts             uint64                     `json:"execution_attempts"`
-	ReexecutionAttempts           uint64                     `json:"reexecution_attempts"`
-	CompletedTransactionsPerS     float64                    `json:"completed_transactions_per_second"`
-	CommittedGoodputPerS          float64                    `json:"committed_goodput_per_second"`
-	ValidationEvents              uint64                     `json:"validation_events"`
-	ValidationFailures            uint64                     `json:"validation_failures"`
-	ReexecutionEvents             uint64                     `json:"reexecution_events"`
-	WaitEvents                    uint64                     `json:"wait_events"`
-	WorkerIdleEvents              uint64                     `json:"worker_idle_events"`
-	QueuePressureEvents           uint64                     `json:"queue_pressure_events"`
-	PolicyDecisionNS              uint64                     `json:"policy_decision_ns"`
-	MaxRSSBytes                   uint64                     `json:"max_rss_bytes"`
-	ActionCounters                []control.ActionCounter    `json:"action_counters,omitempty"`
-	FallbackCounters              []control.ActionCounter    `json:"fallback_counters,omitempty"`
-	EffectiveSpeculationLimit     uint64                     `json:"effective_speculation_limit"`
-	SpeculationLimitApplied       bool                       `json:"speculation_limit_applied"`
-	SpeculationTelemetryAvailable bool                       `json:"speculation_telemetry_available"`
-	PeakSpeculativeInflight       uint64                     `json:"peak_speculative_inflight"`
-	AdmissionStallEvents          uint64                     `json:"admission_stall_events"`
-	AdmissionStallNS              uint64                     `json:"admission_stall_ns"`
-	Dependency                    control.DependencyCounters `json:"dependency"`
-	Unavailable                   []string                   `json:"unavailable"`
+	Blocks                        uint64                       `json:"blocks"`
+	Transactions                  uint64                       `json:"transactions"`
+	SuccessfulTransactions        uint64                       `json:"successful_transactions"`
+	FailedTransactions            uint64                       `json:"failed_transactions"`
+	UsefulExecutionUnits          uint64                       `json:"useful_execution_units"`
+	ReexecutedExecutionUnits      uint64                       `json:"reexecuted_execution_units"`
+	DiscardedExecutionUnits       uint64                       `json:"discarded_execution_units"`
+	ExecutionAttempts             uint64                       `json:"execution_attempts"`
+	ReexecutionAttempts           uint64                       `json:"reexecution_attempts"`
+	CompletedTransactionsPerS     float64                      `json:"completed_transactions_per_second"`
+	CommittedGoodputPerS          float64                      `json:"committed_goodput_per_second"`
+	ValidationEvents              uint64                       `json:"validation_events"`
+	ValidationFailures            uint64                       `json:"validation_failures"`
+	ReexecutionEvents             uint64                       `json:"reexecution_events"`
+	WaitEvents                    uint64                       `json:"wait_events"`
+	WorkerIdleEvents              uint64                       `json:"worker_idle_events"`
+	QueuePressureEvents           uint64                       `json:"queue_pressure_events"`
+	PolicyDecisionNS              uint64                       `json:"policy_decision_ns"`
+	MaxRSSBytes                   uint64                       `json:"max_rss_bytes"`
+	ActionCounters                []control.ActionCounter      `json:"action_counters,omitempty"`
+	FallbackCounters              []control.ActionCounter      `json:"fallback_counters,omitempty"`
+	EffectiveSpeculationLimit     uint64                       `json:"effective_speculation_limit"`
+	SpeculationLimitApplied       bool                         `json:"speculation_limit_applied"`
+	SpeculationTelemetryAvailable bool                         `json:"speculation_telemetry_available"`
+	PeakSpeculativeInflight       uint64                       `json:"peak_speculative_inflight"`
+	AdmissionStallEvents          uint64                       `json:"admission_stall_events"`
+	AdmissionStallNS              uint64                       `json:"admission_stall_ns"`
+	Dependency                    control.DependencyCounters   `json:"dependency"`
+	KernelPolicy                  control.KernelPolicyCounters `json:"kernel_policy"`
+	Unavailable                   []string                     `json:"unavailable"`
 }
 
 type BenchmarkRecord struct {
@@ -231,6 +235,7 @@ func CollectMetrics(results []model.BlockResult, traces []control.Trace, executi
 			metrics.ReexecutedExecutionUnits += trace.Work.ReexecutedExecutionUnits
 			metrics.DiscardedExecutionUnits += trace.Work.DiscardedExecutionUnits
 			mergeDependencyCounters(&metrics.Dependency, trace.Work.Dependency, dependencyTelemetrySeen)
+			mergeKernelPolicyCounters(&metrics.KernelPolicy, trace.Work.KernelPolicy)
 			dependencyTelemetrySeen = true
 		}
 		for _, counter := range trace.ActionCounters {
@@ -375,4 +380,24 @@ func median(values []uint64) uint64 {
 		return ordered[middle]
 	}
 	return ordered[middle-1]/2 + ordered[middle]/2 + (ordered[middle-1]%2+ordered[middle]%2)/2
+}
+
+// mergeKernelPolicyCounters accumulates per-block kernel policy counters. The
+// resolved policy names are identical for every block of a run, so they are
+// copied rather than summed.
+func mergeKernelPolicyCounters(target *control.KernelPolicyCounters, block control.KernelPolicyCounters) {
+	target.Applied = block.Applied
+	target.EstimateRead = block.EstimateRead
+	target.IdleWait = block.IdleWait
+	target.Dispatch = block.Dispatch
+	target.EstimateSuspends += block.EstimateSuspends
+	target.EstimateSuspendNS += block.EstimateSuspendNS
+	target.EstimateAborts += block.EstimateAborts
+	target.DispatchDeferrals += block.DispatchDeferrals
+	target.WorkerYields += block.WorkerYields
+	if block.PeakRunnableWorkers > target.PeakRunnableWorkers {
+		target.PeakRunnableWorkers = block.PeakRunnableWorkers
+	}
+	target.IdleParks += block.IdleParks
+	target.ReadyQueueDispatches += block.ReadyQueueDispatches
 }

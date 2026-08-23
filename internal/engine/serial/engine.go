@@ -141,7 +141,7 @@ func (e *Engine) ExecuteBlock(
 		}
 
 		view := state.NewOverlay(working)
-		txResult := e.runtime.ExecuteWithHooks(ctx, txContext, transaction, view, dispatcher)
+		txResult := e.runtime.ExecuteWithHooks(ctx, txContext, transaction, view, dispatcher, nil)
 		validationContext := txContext
 		validationContext.Ordinal = ^uint64(0) - 1
 		dispatcher.OnValidationPoint(control.ValidationContext{

@@ -21,12 +21,14 @@ type dependencyPreparation struct {
 	controller     *dependencyController
 	estimates      []kernel.MultiLocations
 	consumerActive bool
+	kernelPolicy   kernel.KernelPolicy
 }
 
 func prepareDependency(
 	ctx context.Context,
 	block model.Block,
 	plan engineapi.DependencyPlan,
+	kernelPlan engineapi.KernelPlan,
 	storeIndex int,
 	capture bool,
 ) (dependencyPreparation, error) {
@@ -35,6 +37,10 @@ func prepareDependency(
 		return dependencyPreparation{}, err
 	}
 	preparation := dependencyPreparation{base: artifact.counters(plan)}
+	preparation.kernelPolicy = kernel.KernelPolicy{
+		EstimateRead: kernel.EstimateReadPolicy(kernelPlan.EstimateRead),
+		IdleWait:     kernel.IdleWaitPolicy(kernelPlan.IdleWait),
+	}
 	if plan.Source == control.DependencySourceRuntimeObserved {
 		preparation.base.AcquisitionDisposition = control.DependencyDispositionRuntimeKernel
 		return preparation, nil
@@ -71,14 +77,27 @@ func prepareDependency(
 	}
 
 	if plan.WaitPolicy != control.DependencyWaitNone {
-		var gate dependencyGate
-		if plan.WaitPolicy == control.DependencyWaitContiguousFrontier {
-			gate = newSummaryDependencyGate(representation.barriers)
+		if kernelPlan.Dispatch == control.DependencyDispatchReadyQueue {
+			// The scheduler defers a transaction that is not ready instead of
+			// dispatching it to a worker that would immediately block, so the
+			// in-callback gate is not installed at all. Wait accounting moves
+			// to the kernel policy counters.
+			preparation.kernelPolicy.Dispatch = kernel.DispatchReadyQueue
+			if plan.WaitPolicy == control.DependencyWaitContiguousFrontier {
+				preparation.kernelPolicy.Barriers = representation.barriers
+			} else {
+				preparation.kernelPolicy.Predecessors = representation.predecessors
+			}
 		} else {
-			gate = newExplicitDependencyGate(representation.predecessors)
+			var gate dependencyGate
+			if plan.WaitPolicy == control.DependencyWaitContiguousFrontier {
+				gate = newSummaryDependencyGate(representation.barriers)
+			} else {
+				gate = newExplicitDependencyGate(representation.predecessors)
+			}
+			preparation.controller = &dependencyController{gate: gate, capture: capture}
+			preparation.base.ResolutionMeasured = capture
 		}
-		preparation.controller = &dependencyController{gate: gate, capture: capture}
-		preparation.base.ResolutionMeasured = capture
 	}
 	if plan.EstimateInjection == control.DependencyEstimatesWrite {
 		estimateStarted := measuredStart(capture)
@@ -692,4 +711,24 @@ func (g *summaryDependencyGate) Complete(transaction int) {
 		g.wake = make(chan struct{})
 	}
 	g.mu.Unlock()
+}
+
+// kernelPolicyCounters projects the kernel policy result into the control
+// vocabulary. The resolved plan is always reported, even when the frozen
+// default path was used, so a record always states which behaviour produced it.
+func kernelPolicyCounters(plan engineapi.KernelPlan, stats kernel.KernelPolicyStats) control.KernelPolicyCounters {
+	return control.KernelPolicyCounters{
+		Applied:              stats.Applied,
+		EstimateRead:         plan.EstimateRead,
+		IdleWait:             plan.IdleWait,
+		Dispatch:             plan.Dispatch,
+		EstimateSuspends:     stats.EstimateSuspends,
+		EstimateSuspendNS:    stats.EstimateSuspendNS,
+		EstimateAborts:       stats.EstimateAborts,
+		DispatchDeferrals:    stats.DispatchDeferrals,
+		WorkerYields:         stats.WorkerYields,
+		PeakRunnableWorkers:  stats.PeakRunnableWorkers,
+		IdleParks:            stats.IdleParks,
+		ReadyQueueDispatches: stats.ReadyQueueDispatches,
+	}
 }
