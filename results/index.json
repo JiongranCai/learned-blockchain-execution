@@ -58,6 +58,23 @@
         "archive_sha256": "b0f468f11179d9043f81bd0aaa0494df3aaaf67a4fa938a8e60ec580462557c5"
       },
       "formal_report": "runs/2026-08-13-linux-aws-metal-03eb789-cq3-structure-specialization-04/formal/analysis/REPORT.md"
+    },
+    {
+      "run_id": "2026-08-22-linux-aws-metal-38cf5c0-cq3-ready-queue-05",
+      "path": "runs/2026-08-22-linux-aws-metal-38cf5c0-cq3-ready-queue-05",
+      "status": "complete",
+      "run_classes": [
+        "pilot",
+        "formal"
+      ],
+      "source_commit": "38cf5c09f8b599829eebc3dd52beb7526b62046d",
+      "storage": {
+        "mode": "external_archive",
+        "archive_path": "archives/2026-08-22-linux-aws-metal-38cf5c0-cq3-ready-queue-05.tar.gz",
+        "archive_size_bytes": 15150836,
+        "archive_sha256": "ad124b9d4a3e950c6f0bba1ab9738906e9fa64d45512d9903ea33af1f6fb1e05"
+      },
+      "formal_report": "runs/2026-08-22-linux-aws-metal-38cf5c0-cq3-ready-queue-05/formal/analysis/REPORT.md"
     }
   ]
 }
