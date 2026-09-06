@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: |
           while IFS= read -r file; do
-            jq --exit-status empty "${file}" >/dev/null
+            jq empty "${file}"
           done < <(git ls-files '*.json')
 
       - name: Download modules

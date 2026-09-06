@@ -94,7 +94,7 @@ CQ3-U consumer-only matrices live under `configs/experiments/dependency-consumer
 
 Smoke runs are correctness checks and pilot evidence. Formal performance runs belong on a controlled Linux server with frozen CPU affinity, NUMA policy, page-cache policy, toolchain, and statistical protocol. The committed formal templates intentionally reject placeholder environment controls.
 
-Keep all source, tests, and scripts in Git. Report missing tools or environment problems before installing anything. Prefer direct implementations and remove unused machinery; do not add approval workflows or artifact checksums.
+Keep all source, tests, and scripts in Git. Use descriptive branch names without a `codex` prefix. Report missing tools or environment problems before installing anything. Prefer direct implementations and remove unused machinery; do not add approval workflows or artifact checksums.
 
 Generated results, temporary files, local papers, research notes, and private development artifacts are excluded from Git. The public repository tracks the source, tests, scripts, and reproducible experiment contracts required to rebuild results.
 
