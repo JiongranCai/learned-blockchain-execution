@@ -5,12 +5,9 @@ import argparse
 import copy
 import json
 import pathlib
-import re
-import subprocess
 
 
-REPO = pathlib.Path("/home/ubuntu/project/learned-blockchain-execution")
-ZERO_HASH = "0" * 64
+REPO = pathlib.Path(__file__).resolve().parent.parent
 SEEDS = (20260831, 20260832)
 COMPUTE_LEVELS = (1_000, 100_000)
 PROFILES = (
@@ -162,23 +159,16 @@ def synthetic_workload(profile, compute_units, seed):
     return common
 
 
-def workload(profile, compute_units, seed, expected_hash):
-    return {
-        "synthetic": synthetic_workload(profile, compute_units, seed),
-        "expected_hash": expected_hash,
-    }
-
-
-def matrix(run_id, run_class, profile, compute_units, seed, expected_hash, selected_cases=None):
+def matrix(run_id, run_class, profile, compute_units, seed):
     phase = "pilot" if run_class == "smoke" else "formal"
     label = workload_label(profile, compute_units, seed)
     artifact_dir = f"results/runs/{run_id}/{phase}/artifacts/{profile['kind']}/{label}"
     warmups, measurements = (1, 3) if run_class == "smoke" else (3, 30)
     profile_index = next(index for index, value in enumerate(PROFILES) if value["name"] == profile["name"])
     value = {
-        "schema_version": "experiment-matrix-v7",
+        "schema_version": "experiment-matrix-v8",
         "run_class": run_class,
-        "workload": workload(profile, compute_units, seed, expected_hash),
+        "workload": {"synthetic": synthetic_workload(profile, compute_units, seed)},
         "statistical_protocol": "configs/statistical/protocol-v1.json",
         "warmup_rounds": warmups,
         "measurement_rounds": measurements,
@@ -191,9 +181,8 @@ def matrix(run_id, run_class, profile, compute_units, seed, expected_hash, selec
             "page_cache": "unchanged_no_drop",
             "process_reuse": "fresh_process_per_run",
         },
-        "cases": copy.deepcopy(selected_cases if selected_cases is not None else CASES),
+        "cases": copy.deepcopy(CASES),
         "output": {
-            "validation_bundle": f"{artifact_dir}/validation-bundle.json",
             "validation_records": f"{artifact_dir}/validation.jsonl",
             "run_records": f"{artifact_dir}/runs.jsonl",
             "action_traces": f"{artifact_dir}/action-traces.jsonl",
@@ -205,25 +194,6 @@ def matrix(run_id, run_class, profile, compute_units, seed, expected_hash, selec
 def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-
-
-def discover_hash(run_id, bench, profile, compute_units, seed):
-    probe_case = [blockstm_case("runtime-lw", 0, "runtime_observed", "version_only", "none")]
-    label, probe = matrix(run_id, "smoke", profile, compute_units, seed, ZERO_HASH, probe_case)
-    probe_path = REPO / "results" / "runs" / run_id / "configs" / "hash-probes" / f"{label}.json"
-    write_json(probe_path, probe)
-    result = subprocess.run(
-        [str(bench), "validate", "-config", str(probe_path)],
-        cwd=REPO,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-    match = re.search(r"got ([0-9a-f]{64}), want " + ZERO_HASH, result.stdout)
-    if result.returncode == 0 or not match:
-        raise RuntimeError(f"could not discover hash for {label}: {result.stdout}")
-    return match.group(1)
 
 
 def design_markdown():
@@ -257,16 +227,8 @@ Pilot uses 1+3 rounds. Formal uses 3+30 rounds under statistical-protocol-v1.
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--bench", type=pathlib.Path, required=True)
     args = parser.parse_args()
     run_dir = REPO / "results" / "runs" / args.run_id
-
-    hashes = {}
-    for profile in PROFILES:
-        for compute_units in COMPUTE_LEVELS:
-            for seed in SEEDS:
-                label = workload_label(profile, compute_units, seed)
-                hashes[label] = discover_hash(args.run_id, args.bench, profile, compute_units, seed)
 
     for run_class in ("smoke", "formal"):
         phase = "pilot" if run_class == "smoke" else "formal"
@@ -274,7 +236,7 @@ def main():
             for compute_units in COMPUTE_LEVELS:
                 for seed in SEEDS:
                     label = workload_label(profile, compute_units, seed)
-                    _, value = matrix(args.run_id, run_class, profile, compute_units, seed, hashes[label])
+                    _, value = matrix(args.run_id, run_class, profile, compute_units, seed)
                     path = run_dir / "configs" / phase / profile["kind"] / f"{label}.json"
                     write_json(path, value)
                     (REPO / value["output"]["run_records"]).parent.mkdir(parents=True, exist_ok=True)
@@ -295,7 +257,6 @@ def main():
         "excluded": {"full_graph": "no enabling consumer in current adapter"},
         "case_count_per_matrix": len(CASES),
         "matrix_count_per_stage": len(PROFILES) * len(COMPUTE_LEVELS) * len(SEEDS),
-        "workload_hashes": hashes,
         "pilot_rounds": {"warmup": 1, "measurement": 3},
         "formal_rounds": {"warmup": 3, "measurement": 30},
         "cpu_affinity": "0-7",
@@ -304,9 +265,8 @@ def main():
     }
     write_json(run_dir / "manifest.json", manifest)
     (run_dir / "DESIGN.md").write_text(design_markdown(), encoding="utf-8")
-    for key in sorted(hashes):
-        print(f"{key} hash={hashes[key]}")
-    print(f"generated {2 * len(hashes)} matrices with {len(CASES)} cases each")
+
+    print(f"generated {2 * manifest['matrix_count_per_stage']} matrices with {len(CASES)} cases each")
 
 
 if __name__ == "__main__":

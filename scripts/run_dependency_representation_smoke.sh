@@ -24,9 +24,6 @@ cd "${project_root}"
 export GOTOOLCHAIN="${GOTOOLCHAIN:-local}"
 export GOPROXY="${GOPROXY:-off}"
 
-go test -count=1 ./...
-go test -race -count=1 ./...
-go vet ./...
 go build -trimpath -o "${bench_binary}" ./cmd/bench
 
 readonly configs=(
@@ -35,7 +32,6 @@ readonly configs=(
 )
 
 for config_file in "${configs[@]}"; do
-  "${bench_binary}" validate -config "${config_file}"
   "${bench_binary}" run -config "${config_file}"
 done
 

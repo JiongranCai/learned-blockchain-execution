@@ -13,51 +13,11 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/workload"
 )
 
-const ValidationBundleSchemaVersion = "validation-bundle-v7"
+var ErrTelemetryBudget = errors.New("telemetry overhead exceeds frozen budget")
 
-var (
-	ErrInvalidValidationBundle = errors.New("invalid validation bundle")
-	ErrTelemetryBudget         = errors.New("telemetry overhead exceeds frozen budget")
-)
-
-type ValidatedCase struct {
-	ID                              string                                  `json:"id"`
-	Engine                          string                                  `json:"engine"`
-	Policy                          string                                  `json:"policy"`
-	Executors                       int                                     `json:"executors"`
-	MaxSpeculativeInflight          int                                     `json:"max_speculative_inflight"`
-	DependencyMode                  control.DependencyMode                  `json:"dependency_mode"`
-	DependencySource                control.DependencySource                `json:"dependency_source"`
-	DependencyRepresentation        control.DependencyRepresentation        `json:"dependency_representation"`
-	DependencyRepresentationBuilder control.DependencyRepresentationBuilder `json:"dependency_representation_builder"`
-	DependencyWaitPolicy            control.DependencyWaitPolicy            `json:"dependency_wait_policy"`
-	DependencyEstimateInjection     control.DependencyEstimateInjection     `json:"dependency_estimate_injection"`
-	DependencyDispatch              control.DependencyDispatchPolicy        `json:"dependency_dispatch"`
-	EstimateReadPolicy              control.EstimateReadPolicy              `json:"estimate_read_policy"`
-	IdleWaitPolicy                  control.IdleWaitPolicy                  `json:"idle_wait_policy"`
-}
-
-type ValidationBundle struct {
-	SchemaVersion            string          `json:"schema_version"`
-	ConfigSchemaVersion      string          `json:"config_schema_version"`
-	ConfigSchemaHash         string          `json:"config_schema_hash"`
-	ConfigHash               string          `json:"config_hash"`
-	StatisticalSchemaVersion string          `json:"statistical_schema_version"`
-	StatisticalSchemaHash    string          `json:"statistical_schema_hash"`
-	StatisticalProtocolHash  string          `json:"statistical_protocol_hash"`
-	CodeCommit               string          `json:"code_commit"`
-	CodeModified             bool            `json:"code_modified"`
-	BinarySHA256             string          `json:"binary_sha256"`
-	UpstreamCommit           string          `json:"upstream_commit"`
-	WorkloadSchemaVersion    string          `json:"workload_schema_version"`
-	WorkloadHash             string          `json:"workload_hash"`
-	GeneratorVersion         string          `json:"generator_version"`
-	GeneratorSeed            int64           `json:"generator_seed"`
-	OracleEngine             string          `json:"oracle_engine"`
-	OraclePolicy             string          `json:"oracle_policy"`
-	BlockDigests             []string        `json:"block_digests"`
-	ResultDigest             string          `json:"result_digest"`
-	ValidatedCases           []ValidatedCase `json:"validated_cases"`
+type ValidationResult struct {
+	Cases        int
+	ResultDigest string
 }
 
 type WorkerRequest struct {
@@ -74,11 +34,15 @@ type WorkerResponse struct {
 
 type WorkerInvoker func(context.Context, WorkerRequest) (WorkerResponse, error)
 
-func Validate(ctx context.Context, loaded LoadedConfig) (ValidationBundle, error) {
-	protocol, artifact, provenance, err := prepare(loaded)
+func Validate(ctx context.Context, loaded LoadedConfig) (ValidationResult, error) {
+	_, artifact, provenance, err := prepare(loaded)
 	if err != nil {
-		return ValidationBundle{}, err
+		return ValidationResult{}, err
 	}
+	return validate(ctx, loaded, artifact, provenance)
+}
+
+func validate(ctx context.Context, loaded LoadedConfig, artifact workload.Artifact, provenance telemetry.Provenance) (ValidationResult, error) {
 	oracleCase := CaseConfig{
 		ID:                              "serial-oracle",
 		Engine:                          "serial",
@@ -99,10 +63,9 @@ func Validate(ctx context.Context, loaded LoadedConfig) (ValidationBundle, error
 	oracle, err := Execute(oracleContext, artifact, oracleCase, false)
 	cancel()
 	if err != nil {
-		return ValidationBundle{}, fmt.Errorf("serial oracle: %w", err)
+		return ValidationResult{}, fmt.Errorf("serial oracle: %w", err)
 	}
-	records := make([]telemetry.ValidationRecord, 0, len(loaded.Config.Cases))
-	validated := make([]ValidatedCase, 0, len(loaded.Config.Cases))
+	records := make([]any, 0, len(loaded.Config.Cases))
 	var mismatch error
 	for _, experimentCase := range loaded.Config.Cases {
 		candidateContext, candidateCancel := context.WithTimeout(ctx, loaded.Timeout)
@@ -118,10 +81,10 @@ func Validate(ctx context.Context, loaded LoadedConfig) (ValidationBundle, error
 				Capabilities:  candidate.Capabilities,
 				Provenance:    provenance,
 			})
-			if writeErr := WriteJSONLines(loaded.Config.Output.ValidationRecords, validationValues(records)); writeErr != nil {
-				return ValidationBundle{}, writeErr
+			if writeErr := WriteJSONLines(loaded.Config.Output.ValidationRecords, records); writeErr != nil {
+				return ValidationResult{}, writeErr
 			}
-			return ValidationBundle{}, fmt.Errorf("validate case %s: %w", experimentCase.ID, executeErr)
+			return ValidationResult{}, fmt.Errorf("validate case %s: %w", experimentCase.ID, executeErr)
 		}
 		match := ResultsEqual(oracle.Results, candidate.Results)
 		records = append(records, telemetry.ValidationRecord{
@@ -138,66 +101,22 @@ func Validate(ctx context.Context, loaded LoadedConfig) (ValidationBundle, error
 		if !match && mismatch == nil {
 			mismatch = fmt.Errorf("%w: case %s", ErrCanonicalMismatch, experimentCase.ID)
 		}
-		if match {
-			validated = append(validated, ValidatedCase{
-				ID:                              experimentCase.ID,
-				Engine:                          experimentCase.Engine,
-				Policy:                          experimentCase.Policy,
-				Executors:                       experimentCase.Executors,
-				MaxSpeculativeInflight:          experimentCase.MaxSpeculativeInflight,
-				DependencyMode:                  experimentCase.DependencyMode,
-				DependencySource:                experimentCase.DependencySource,
-				DependencyRepresentation:        experimentCase.DependencyRepresentation,
-				DependencyRepresentationBuilder: experimentCase.DependencyRepresentationBuilder,
-				DependencyWaitPolicy:            experimentCase.DependencyWaitPolicy,
-				DependencyEstimateInjection:     experimentCase.DependencyEstimateInjection,
-				DependencyDispatch:              experimentCase.DependencyDispatch,
-				EstimateReadPolicy:              experimentCase.EstimateReadPolicy,
-				IdleWaitPolicy:                  experimentCase.IdleWaitPolicy,
-			})
-		}
 	}
-	if err := WriteJSONLines(loaded.Config.Output.ValidationRecords, validationValues(records)); err != nil {
-		return ValidationBundle{}, err
+	if err := WriteJSONLines(loaded.Config.Output.ValidationRecords, records); err != nil {
+		return ValidationResult{}, err
 	}
 	if mismatch != nil {
-		return ValidationBundle{}, mismatch
+		return ValidationResult{}, mismatch
 	}
-	commit, modified := telemetry.BuildIdentity()
-	binaryHash, err := telemetry.BinaryHash()
-	if err != nil {
-		return ValidationBundle{}, err
-	}
-	bundle := ValidationBundle{
-		SchemaVersion:            ValidationBundleSchemaVersion,
-		ConfigSchemaVersion:      ConfigSchemaVersion,
-		ConfigSchemaHash:         SchemaHash(ConfigSchemaVersion),
-		ConfigHash:               loaded.Hash,
-		StatisticalSchemaVersion: StatisticalProtocolSchemaVersion,
-		StatisticalSchemaHash:    SchemaHash(StatisticalProtocolSchemaVersion),
-		StatisticalProtocolHash:  protocol.Hash,
-		CodeCommit:               commit,
-		CodeModified:             modified,
-		BinarySHA256:             binaryHash,
-		UpstreamCommit:           telemetry.UpstreamCommit,
-		WorkloadSchemaVersion:    artifact.SchemaVersion,
-		WorkloadHash:             artifact.CanonicalHash,
-		GeneratorVersion:         artifact.Generator.Version,
-		GeneratorSeed:            artifact.Generator.Seed,
-		OracleEngine:             oracleCase.Engine,
-		OraclePolicy:             oracleCase.Policy,
-		BlockDigests:             BlockDigests(oracle.Results),
-		ResultDigest:             oracle.ResultDigest,
-		ValidatedCases:           validated,
-	}
-	if err := WriteJSON(loaded.Config.Output.ValidationBundle, bundle); err != nil {
-		return ValidationBundle{}, err
-	}
-	return bundle, nil
+	return ValidationResult{Cases: len(records), ResultDigest: oracle.ResultDigest}, nil
 }
 
 func RunMatrix(ctx context.Context, loaded LoadedConfig, invoke WorkerInvoker) error {
-	protocol, _, parentProvenance, err := prepare(loaded)
+	protocol, artifact, parentProvenance, err := prepare(loaded)
+	if err != nil {
+		return err
+	}
+	oracle, err := validate(ctx, loaded, artifact, parentProvenance)
 	if err != nil {
 		return err
 	}
@@ -211,7 +130,10 @@ func RunMatrix(ctx context.Context, loaded LoadedConfig, invoke WorkerInvoker) e
 		timedOut := errors.Is(workerContext.Err(), context.DeadlineExceeded)
 		cancel()
 		if invokeErr == nil {
-			invokeErr = validateWorkerResponse(response, request)
+			response.Record.CanonicalMatch = response.Record.ResultDigest == oracle.ResultDigest
+			if !response.Record.CanonicalMatch {
+				invokeErr = ErrCanonicalMismatch
+			}
 		}
 		if invokeErr != nil {
 			experimentCase, _ := lookupCase(loaded.Config.Cases, request.CaseID)
@@ -257,7 +179,7 @@ func RunMatrix(ctx context.Context, loaded LoadedConfig, invoke WorkerInvoker) e
 			ablation.InstrumentedCase,
 			samples[ablation.OffCase],
 			samples[ablation.InstrumentedCase],
-			protocol.Protocol.TelemetryOverheadBudgetRatio,
+			protocol.TelemetryOverheadBudgetRatio,
 			enforced,
 		)
 		if recordErr != nil {
@@ -281,29 +203,18 @@ func RunMatrix(ctx context.Context, loaded LoadedConfig, invoke WorkerInvoker) e
 }
 
 func RunWorker(ctx context.Context, loaded LoadedConfig, request WorkerRequest) (WorkerResponse, error) {
-	protocol, artifact, provenance, err := prepare(loaded)
+	_, artifact, provenance, err := prepare(loaded)
 	if err != nil {
-		return WorkerResponse{}, err
-	}
-	bundle, err := LoadValidationBundle(loaded.Config.Output.ValidationBundle)
-	if err != nil {
-		return WorkerResponse{}, err
-	}
-	if err := validateBundle(bundle, loaded, protocol, artifact); err != nil {
 		return WorkerResponse{}, err
 	}
 	experimentCase, ok := lookupCase(loaded.Config.Cases, request.CaseID)
 	if !ok {
 		return WorkerResponse{}, fmt.Errorf("%w: unknown case %q", ErrInvalidConfig, request.CaseID)
 	}
-	if !bundleHasCase(bundle, experimentCase) {
-		return WorkerResponse{}, fmt.Errorf("%w: case %q was not validated", ErrInvalidValidationBundle, request.CaseID)
-	}
 	execution, err := Execute(ctx, artifact, experimentCase, true)
 	if err != nil {
 		return WorkerResponse{}, err
 	}
-	match := execution.ResultDigest == bundle.ResultDigest && stringSlicesEqual(BlockDigests(execution.Results), bundle.BlockDigests)
 	runID := runID(request)
 	record := telemetry.BenchmarkRecord{
 		SchemaVersion: telemetry.BenchmarkRecordSchema,
@@ -320,13 +231,9 @@ func RunWorker(ctx context.Context, loaded LoadedConfig, request WorkerRequest) 
 			ExecutionNS:    execution.ExecutionNS,
 			BlockLatencyNS: execution.BlockLatencyNS,
 		},
-		Metrics:        telemetry.CollectMetrics(execution.Results, execution.Traces, execution.ExecutionNS, execution.MaxRSSBytes),
-		BlockDigests:   BlockDigests(execution.Results),
-		ResultDigest:   execution.ResultDigest,
-		CanonicalMatch: match,
-	}
-	if !match {
-		return WorkerResponse{}, fmt.Errorf("%w: performance run %s", ErrCanonicalMismatch, runID)
+		Metrics:      telemetry.CollectMetrics(execution.Results, execution.Traces, execution.ExecutionNS, execution.MaxRSSBytes),
+		BlockDigests: BlockDigests(execution.Results),
+		ResultDigest: execution.ResultDigest,
 	}
 	response := WorkerResponse{Record: record}
 	if experimentCase.TraceMode == control.TraceDetailed {
@@ -344,40 +251,28 @@ func RunWorker(ctx context.Context, loaded LoadedConfig, request WorkerRequest) 
 	return response, nil
 }
 
-func prepare(loaded LoadedConfig) (LoadedProtocol, workload.Artifact, telemetry.Provenance, error) {
+func prepare(loaded LoadedConfig) (StatisticalProtocol, workload.Artifact, telemetry.Provenance, error) {
 	protocol, err := LoadStatisticalProtocol(loaded.Config.StatisticalProtocol)
 	if err != nil {
-		return LoadedProtocol{}, workload.Artifact{}, telemetry.Provenance{}, err
+		return StatisticalProtocol{}, workload.Artifact{}, telemetry.Provenance{}, err
 	}
-	if err := protocol.Protocol.ValidateRunClass(loaded.Config); err != nil {
-		return LoadedProtocol{}, workload.Artifact{}, telemetry.Provenance{}, err
+	if err := protocol.ValidateRunClass(loaded.Config); err != nil {
+		return StatisticalProtocol{}, workload.Artifact{}, telemetry.Provenance{}, err
 	}
 	artifact, err := LoadWorkload(loaded.Config.Workload)
 	if err != nil {
-		return LoadedProtocol{}, workload.Artifact{}, telemetry.Provenance{}, err
+		return StatisticalProtocol{}, workload.Artifact{}, telemetry.Provenance{}, err
 	}
 	commit, modified := telemetry.BuildIdentity()
-	binaryHash, err := telemetry.BinaryHash()
-	if err != nil {
-		return LoadedProtocol{}, workload.Artifact{}, telemetry.Provenance{}, err
-	}
-	if loaded.Config.RunClass == "formal" && (commit == "unknown" || modified) {
-		return LoadedProtocol{}, workload.Artifact{}, telemetry.Provenance{}, fmt.Errorf("%w: formal runs require a clean VCS-stamped binary", ErrInvalidConfig)
-	}
 	provenance := telemetry.Provenance{
 		CodeCommit:               commit,
 		CodeModified:             modified,
-		BinarySHA256:             binaryHash,
 		ProcessID:                os.Getpid(),
 		UpstreamCommit:           telemetry.UpstreamCommit,
+		ConfigPath:               loaded.Path,
 		ConfigSchemaVersion:      ConfigSchemaVersion,
-		ConfigSchemaHash:         SchemaHash(ConfigSchemaVersion),
-		ConfigHash:               loaded.Hash,
 		StatisticalSchemaVersion: StatisticalProtocolSchemaVersion,
-		StatisticalSchemaHash:    SchemaHash(StatisticalProtocolSchemaVersion),
-		StatisticalProtocolHash:  protocol.Hash,
 		WorkloadSchemaVersion:    artifact.SchemaVersion,
-		WorkloadHash:             artifact.CanonicalHash,
 		GeneratorVersion:         artifact.Generator.Version,
 		GeneratorSeed:            artifact.Generator.Seed,
 		Hardware:                 telemetry.CollectHardware(),
@@ -391,33 +286,6 @@ func prepare(loaded LoadedConfig) (LoadedProtocol, workload.Artifact, telemetry.
 		},
 	}
 	return protocol, artifact, provenance, nil
-}
-
-func LoadValidationBundle(path string) (ValidationBundle, error) {
-	var bundle ValidationBundle
-	if err := ReadJSON(path, &bundle); err != nil {
-		return ValidationBundle{}, err
-	}
-	if bundle.SchemaVersion != ValidationBundleSchemaVersion || bundle.ResultDigest == "" || len(bundle.BlockDigests) == 0 {
-		return ValidationBundle{}, fmt.Errorf("%w: incomplete bundle", ErrInvalidValidationBundle)
-	}
-	return bundle, nil
-}
-
-func validateBundle(bundle ValidationBundle, loaded LoadedConfig, protocol LoadedProtocol, artifact workload.Artifact) error {
-	commit, modified := telemetry.BuildIdentity()
-	binaryHash, err := telemetry.BinaryHash()
-	if err != nil {
-		return err
-	}
-	if bundle.ConfigSchemaVersion != ConfigSchemaVersion || bundle.ConfigSchemaHash != SchemaHash(ConfigSchemaVersion) || bundle.ConfigHash != loaded.Hash ||
-		bundle.StatisticalSchemaVersion != StatisticalProtocolSchemaVersion || bundle.StatisticalSchemaHash != SchemaHash(StatisticalProtocolSchemaVersion) || bundle.StatisticalProtocolHash != protocol.Hash ||
-		bundle.CodeCommit != commit || bundle.CodeModified != modified || bundle.BinarySHA256 != binaryHash || bundle.UpstreamCommit != telemetry.UpstreamCommit ||
-		bundle.WorkloadSchemaVersion != artifact.SchemaVersion || bundle.WorkloadHash != artifact.CanonicalHash ||
-		bundle.GeneratorVersion != artifact.Generator.Version || bundle.GeneratorSeed != artifact.Generator.Seed {
-		return fmt.Errorf("%w: provenance does not match current binary/config/workload", ErrInvalidValidationBundle)
-	}
-	return nil
 }
 
 func buildSchedule(config Config) []WorkerRequest {
@@ -445,26 +313,6 @@ func buildSchedule(config Config) []WorkerRequest {
 	return schedule
 }
 
-func bundleHasCase(bundle ValidationBundle, experimentCase CaseConfig) bool {
-	for _, candidate := range bundle.ValidatedCases {
-		if candidate.ID == experimentCase.ID && candidate.Engine == experimentCase.Engine &&
-			candidate.Policy == experimentCase.Policy && candidate.Executors == experimentCase.Executors &&
-			candidate.MaxSpeculativeInflight == experimentCase.MaxSpeculativeInflight &&
-			candidate.DependencyMode == experimentCase.DependencyMode &&
-			candidate.DependencySource == experimentCase.DependencySource &&
-			candidate.DependencyRepresentation == experimentCase.DependencyRepresentation &&
-			candidate.DependencyRepresentationBuilder == experimentCase.DependencyRepresentationBuilder &&
-			candidate.DependencyWaitPolicy == experimentCase.DependencyWaitPolicy &&
-			candidate.DependencyEstimateInjection == experimentCase.DependencyEstimateInjection &&
-			candidate.DependencyDispatch == experimentCase.DependencyDispatch &&
-			candidate.EstimateReadPolicy == experimentCase.EstimateReadPolicy &&
-			candidate.IdleWaitPolicy == experimentCase.IdleWaitPolicy {
-			return true
-		}
-	}
-	return false
-}
-
 func lookupCase(cases []CaseConfig, id string) (CaseConfig, bool) {
 	for _, experimentCase := range cases {
 		if experimentCase.ID == id {
@@ -472,26 +320,6 @@ func lookupCase(cases []CaseConfig, id string) (CaseConfig, bool) {
 		}
 	}
 	return CaseConfig{}, false
-}
-
-func validationValues(records []telemetry.ValidationRecord) []any {
-	values := make([]any, len(records))
-	for index := range records {
-		values[index] = records[index]
-	}
-	return values
-}
-
-func stringSlicesEqual(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
 }
 
 func containsString(values []string, target string) bool {
@@ -512,19 +340,4 @@ func writeRunOutputs(loaded LoadedConfig, records, traces []any) error {
 		return err
 	}
 	return WriteJSONLines(loaded.Config.Output.ActionTraces, traces)
-}
-
-func validateWorkerResponse(response WorkerResponse, request WorkerRequest) error {
-	record := response.Record
-	if record.SchemaVersion != telemetry.BenchmarkRecordSchema || record.RunID != runID(request) ||
-		record.Status != "success" || record.Censored || !record.CanonicalMatch ||
-		record.Case.ID != request.CaseID || record.Phase != request.Phase || record.Round != request.Round || record.Order != request.Order {
-		return errors.New("worker returned an invalid benchmark record")
-	}
-	for _, trace := range response.Traces {
-		if trace.SchemaVersion != telemetry.ActionTraceSchema || trace.RunID != record.RunID {
-			return errors.New("worker returned an invalid action trace record")
-		}
-	}
-	return nil
 }

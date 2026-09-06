@@ -26,10 +26,9 @@ import (
 const aggregateResultSchema = "workload-result-v1"
 
 var (
-	ErrWorkloadHashMismatch = errors.New("workload hash does not match frozen config")
-	ErrCanonicalMismatch    = errors.New("candidate result does not match serial oracle")
-	ErrUnknownEngine        = errors.New("unknown engine")
-	ErrUnknownPolicy        = errors.New("unknown policy")
+	ErrCanonicalMismatch = errors.New("candidate result does not match serial oracle")
+	ErrUnknownEngine     = errors.New("unknown engine")
+	ErrUnknownPolicy     = errors.New("unknown policy")
 )
 
 type Execution struct {
@@ -43,24 +42,14 @@ type Execution struct {
 }
 
 func LoadWorkload(config WorkloadConfig) (workload.Artifact, error) {
-	var artifact workload.Artifact
-	var err error
 	if config.ArtifactPath != "" {
-		encoded, readErr := os.ReadFile(config.ArtifactPath)
-		if readErr != nil {
-			return workload.Artifact{}, readErr
+		encoded, err := os.ReadFile(config.ArtifactPath)
+		if err != nil {
+			return workload.Artifact{}, err
 		}
-		artifact, err = workload.ParseDescriptor(encoded)
-	} else {
-		artifact, err = synthetic.Generate(*config.Synthetic)
+		return workload.ParseDescriptor(encoded)
 	}
-	if err != nil {
-		return workload.Artifact{}, err
-	}
-	if artifact.CanonicalHash != config.ExpectedHash {
-		return workload.Artifact{}, fmt.Errorf("%w: got %s, want %s", ErrWorkloadHashMismatch, artifact.CanonicalHash, config.ExpectedHash)
-	}
-	return artifact, nil
+	return synthetic.Generate(*config.Synthetic)
 }
 
 func Execute(ctx context.Context, artifact workload.Artifact, experimentCase CaseConfig, omitDigest bool) (Execution, error) {
@@ -86,7 +75,6 @@ func Execute(ctx context.Context, artifact workload.Artifact, experimentCase Cas
 		started := time.Now()
 		result, trace, executeErr := selectedEngine.ExecuteBlock(ctx, block, storage, engineapi.RunConfig{
 			Executors:                       experimentCase.Executors,
-			EpochID:                         input.ArtifactHash,
 			Policy:                          selectedPolicy,
 			TraceMode:                       experimentCase.TraceMode,
 			MaxSpeculativeInflight:          experimentCase.MaxSpeculativeInflight,

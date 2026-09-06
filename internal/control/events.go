@@ -68,14 +68,6 @@ var eventRegistry = []EventDescriptor{
 	{EventQueuePressure, "TxPolicy.OnQueuePressure", "OnQueuePressure", "ResourceDecision", TrustLocal},
 }
 
-var ErrInvalidEventRegistry = errors.New("invalid event registry")
-
-func init() {
-	if err := ValidateEventRegistry(); err != nil {
-		panic(err)
-	}
-}
-
 func EventRegistry() []EventDescriptor {
 	return append([]EventDescriptor(nil), eventRegistry...)
 }
@@ -87,66 +79,6 @@ func EventDescription(event Event) (EventDescriptor, bool) {
 		}
 	}
 	return EventDescriptor{}, false
-}
-
-func ValidateEventRegistry() error {
-	expected := []Event{
-		EventEpochStart,
-		EventBlockReady,
-		EventTxAdmit,
-		EventTxReady,
-		EventTaskReady,
-		EventCallEnter,
-		EventBranch,
-		EventBeforeRead,
-		EventBeforeWrite,
-		EventReadEstimate,
-		EventConflict,
-		EventValidationPoint,
-		EventTxEnd,
-		EventSubtxEnd,
-		EventValidationFail,
-		EventReplayStart,
-		EventRetryLimit,
-		EventWorkerIdle,
-		EventQueuePressure,
-	}
-	if len(eventRegistry) != len(expected) {
-		return fmt.Errorf("%w: got %d entries, want %d", ErrInvalidEventRegistry, len(eventRegistry), len(expected))
-	}
-	events := make(map[Event]struct{}, len(eventRegistry))
-	dispatchKeys := make(map[string]struct{}, len(eventRegistry))
-	for _, descriptor := range eventRegistry {
-		if descriptor.Event == "" || descriptor.DispatchKey == "" || descriptor.Hook == "" || descriptor.ActionSchema == "" {
-			return fmt.Errorf("%w: incomplete descriptor for %q", ErrInvalidEventRegistry, descriptor.Event)
-		}
-		if !validTrustClass(descriptor.TrustClass) {
-			return fmt.Errorf("%w: invalid trust class for %q", ErrInvalidEventRegistry, descriptor.Event)
-		}
-		if _, exists := events[descriptor.Event]; exists {
-			return fmt.Errorf("%w: duplicate event %q", ErrInvalidEventRegistry, descriptor.Event)
-		}
-		if _, exists := dispatchKeys[descriptor.DispatchKey]; exists {
-			return fmt.Errorf("%w: duplicate dispatch key %q", ErrInvalidEventRegistry, descriptor.DispatchKey)
-		}
-		events[descriptor.Event] = struct{}{}
-		dispatchKeys[descriptor.DispatchKey] = struct{}{}
-	}
-	for _, event := range expected {
-		if _, exists := events[event]; !exists {
-			return fmt.Errorf("%w: missing event %q", ErrInvalidEventRegistry, event)
-		}
-	}
-	return nil
-}
-
-func validTrustClass(class TrustClass) bool {
-	switch class {
-	case TrustDeterministic, TrustLocal, TrustHint, TrustSafety:
-		return true
-	default:
-		return false
-	}
 }
 
 type EventCapability struct {

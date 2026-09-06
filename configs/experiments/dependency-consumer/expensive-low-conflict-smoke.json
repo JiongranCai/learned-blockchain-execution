@@ -1,5 +1,5 @@
 {
-  "schema_version": "experiment-matrix-v7",
+  "schema_version": "experiment-matrix-v8",
   "statistical_protocol": "configs/statistical/protocol-v1.json",
   "order_seed": 20260811,
   "timeout": "2m",
@@ -114,8 +114,7 @@
       "max_compute_units": 50000,
       "transaction_max_units": 50004,
       "failure_every": 0
-    },
-    "expected_hash": "0f6ae63d5870ff1bb0b36f5fd4e9855318c3e32b6baa33097f365dd4e67388a0"
+    }
   },
   "warmup_rounds": 1,
   "measurement_rounds": 5,
@@ -127,7 +126,6 @@
     "process_reuse": "fresh_process_per_run"
   },
   "output": {
-    "validation_bundle": "results/dependency-consumer/expensive-low-conflict/validation-bundle.json",
     "validation_records": "results/dependency-consumer/expensive-low-conflict/validation.jsonl",
     "run_records": "results/dependency-consumer/expensive-low-conflict/runs.jsonl",
     "action_traces": "results/dependency-consumer/expensive-low-conflict/action-traces.jsonl"

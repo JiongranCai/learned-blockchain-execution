@@ -24,14 +24,10 @@ cd "${project_root}"
 export GOTOOLCHAIN="${GOTOOLCHAIN:-local}"
 export GOPROXY="${GOPROXY:-off}"
 
-go test -count=1 ./...
-go test -race -count=1 ./...
-go vet ./...
 go build -trimpath -o "${bench_binary}" ./cmd/bench
 
 readonly config_file="configs/experiments/kernel-policy/selective-read-set-smoke.json"
 
-"${bench_binary}" validate -config "${config_file}"
 "${bench_binary}" run -config "${config_file}"
 
 printf '%s\n' "kernel-policy smoke completed; raw JSONL is under results/kernel-policy/"

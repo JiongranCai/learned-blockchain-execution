@@ -15,25 +15,8 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/workload/synthetic"
 )
 
-const testArtifactHash = "6b71316d4076a8d0e27f078e6c52a2f9a042047e88c34ee2ea63792fafbe609d"
-
-func TestValidateAndRunUseFrozenBundleAndVersionedTelemetry(t *testing.T) {
+func TestRunValidatesAndWritesVersionedTelemetry(t *testing.T) {
 	loaded := writeTestConfig(t)
-	bundle, err := experiment.Validate(context.Background(), loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(bundle.ValidatedCases) != 3 || bundle.ResultDigest == "" || bundle.WorkloadHash != testArtifactHash {
-		t.Fatalf("unexpected validation bundle: %#v", bundle)
-	}
-	if bundle.ValidatedCases[0].MaxSpeculativeInflight != 2 || bundle.ValidatedCases[2].MaxSpeculativeInflight != 1 {
-		t.Fatalf("validation bundle did not bind speculation limits: %#v", bundle.ValidatedCases)
-	}
-	if bundle.ValidatedCases[0].DependencyMode != control.DependencyMVCCRuntime ||
-		bundle.ValidatedCases[0].DependencySource != control.DependencySourceRuntimeObserved {
-		t.Fatalf("validation bundle did not bind dependency controls: %#v", bundle.ValidatedCases)
-	}
-
 	response, err := experiment.RunWorker(context.Background(), loaded, experiment.WorkerRequest{
 		CaseID: "detailed",
 		Phase:  "measurement",
@@ -43,7 +26,7 @@ func TestValidateAndRunUseFrozenBundleAndVersionedTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Record.SchemaVersion != telemetry.BenchmarkRecordSchema || !response.Record.CanonicalMatch || response.Record.ResultDigest != bundle.ResultDigest {
+	if response.Record.SchemaVersion != telemetry.BenchmarkRecordSchema || response.Record.ResultDigest == "" {
 		t.Fatalf("unexpected benchmark record: %#v", response.Record)
 	}
 	if response.Record.Case.MaxSpeculativeInflight != 1 || response.Record.Metrics.EffectiveSpeculationLimit != 1 ||
@@ -55,7 +38,7 @@ func TestValidateAndRunUseFrozenBundleAndVersionedTelemetry(t *testing.T) {
 		response.Record.Metrics.Dependency.Source != control.DependencySourceRuntimeObserved {
 		t.Fatalf("dependency case/metrics are incomplete: %#v", response.Record)
 	}
-	if response.Record.Provenance.ProcessID == 0 || len(response.Record.Provenance.BinarySHA256) != 64 ||
+	if response.Record.Provenance.ProcessID == 0 || response.Record.Provenance.ConfigPath != loaded.Path ||
 		len(response.Record.Capabilities.Events) != len(control.EventRegistry()) {
 		t.Fatalf("runtime provenance/capabilities are incomplete: %#v", response.Record)
 	}
@@ -72,9 +55,22 @@ func TestValidateAndRunUseFrozenBundleAndVersionedTelemetry(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	validationLines := nonEmptyLines(t, loaded.Config.Output.ValidationRecords)
+	if len(validationLines) != len(loaded.Config.Cases) {
+		t.Fatalf("got %d validation records", len(validationLines))
+	}
 	runLines := nonEmptyLines(t, loaded.Config.Output.RunRecords)
 	if len(runLines) != 4 || !strings.Contains(runLines[3], telemetry.AblationRecordSchema) {
 		t.Fatalf("unexpected run JSONL: %v", runLines)
+	}
+	for _, line := range runLines[:3] {
+		var record telemetry.BenchmarkRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		if !record.CanonicalMatch || record.ResultDigest != response.Record.ResultDigest {
+			t.Fatalf("matrix did not compare worker result to oracle: %#v", record)
+		}
 	}
 	traceLines := nonEmptyLines(t, loaded.Config.Output.ActionTraces)
 	if len(traceLines) != 3 {
@@ -82,34 +78,24 @@ func TestValidateAndRunUseFrozenBundleAndVersionedTelemetry(t *testing.T) {
 	}
 }
 
-func TestRunRejectsValidationBundleFromDifferentConfig(t *testing.T) {
+func TestRunRejectsIncorrectWorkerResult(t *testing.T) {
 	loaded := writeTestConfig(t)
-	if _, err := experiment.Validate(context.Background(), loaded); err != nil {
-		t.Fatal(err)
-	}
-	config := loaded.Config
-	config.OrderSeed++
-	writeJSONFile(t, loaded.Path, config)
-	changed, err := experiment.LoadConfig(loaded.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = experiment.RunWorker(context.Background(), changed, experiment.WorkerRequest{
-		CaseID: "off",
-		Phase:  "measurement",
-		Round:  0,
-		Order:  0,
+	err := experiment.RunMatrix(context.Background(), loaded, func(ctx context.Context, request experiment.WorkerRequest) (experiment.WorkerResponse, error) {
+		response, err := experiment.RunWorker(ctx, loaded, request)
+		response.Record.ResultDigest = "incorrect execution result"
+		return response, err
 	})
-	if !errors.Is(err, experiment.ErrInvalidValidationBundle) {
-		t.Fatalf("got %v, want validation bundle error", err)
+	if !errors.Is(err, experiment.ErrCanonicalMismatch) {
+		t.Fatalf("got %v, want canonical mismatch", err)
+	}
+	lines := nonEmptyLines(t, loaded.Config.Output.RunRecords)
+	if len(lines) != 1 || !strings.Contains(lines[0], `"status":"failed"`) {
+		t.Fatalf("incorrect execution was not recorded as failed: %v", lines)
 	}
 }
 
 func TestRunPreservesFailureRecord(t *testing.T) {
 	loaded := writeTestConfig(t)
-	if _, err := experiment.Validate(context.Background(), loaded); err != nil {
-		t.Fatal(err)
-	}
 	wantErr := errors.New("worker crashed")
 	err := experiment.RunMatrix(context.Background(), loaded, func(context.Context, experiment.WorkerRequest) (experiment.WorkerResponse, error) {
 		return experiment.WorkerResponse{}, wantErr
@@ -126,7 +112,7 @@ func TestRunPreservesFailureRecord(t *testing.T) {
 func TestConfigParserRejectsUnknownFieldsAndUnfrozenFormalEnvironment(t *testing.T) {
 	directory := t.TempDir()
 	unknownPath := filepath.Join(directory, "unknown.json")
-	if err := os.WriteFile(unknownPath, []byte(`{"schema_version":"experiment-matrix-v7","unknown":true}`), 0o600); err != nil {
+	if err := os.WriteFile(unknownPath, []byte(`{"schema_version":"experiment-matrix-v8","unknown":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := experiment.LoadConfig(unknownPath); !errors.Is(err, experiment.ErrInvalidConfig) {
@@ -224,7 +210,6 @@ func writeTestConfig(t *testing.T) experiment.LoadedConfig {
 				TransactionMaxUnits:  12,
 				FailureEvery:         3,
 			},
-			ExpectedHash: testArtifactHash,
 		},
 		StatisticalProtocol: protocolPath,
 		WarmupRounds:        0,
@@ -239,12 +224,11 @@ func writeTestConfig(t *testing.T) experiment.LoadedConfig {
 			ProcessReuse: "fresh_process_per_run",
 		},
 		Cases: []experiment.CaseConfig{
-			{ID: "off", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, MaxSpeculativeInflight: 2, DependencyMode: control.DependencyMVCCRuntime, DependencySource: control.DependencySourceRuntimeObserved, DependencyRepresentation: control.DependencyRepresentationVersionOnly, DependencyRepresentationBuilder: control.DependencyRepresentationBuilderNone, DependencyWaitPolicy: control.DependencyWaitNone, DependencyEstimateInjection: control.DependencyEstimatesDisabled, DependencyDispatch: control.DependencyDispatchIndexOrder, EstimateReadPolicy: control.EstimateReadSuspendInPlace, IdleWaitPolicy: control.IdleWaitGosched, TraceMode: control.TraceOff},
-			{ID: "counters", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, MaxSpeculativeInflight: 2, DependencyMode: control.DependencyMVCCRuntime, DependencySource: control.DependencySourceRuntimeObserved, DependencyRepresentation: control.DependencyRepresentationVersionOnly, DependencyRepresentationBuilder: control.DependencyRepresentationBuilderNone, DependencyWaitPolicy: control.DependencyWaitNone, DependencyEstimateInjection: control.DependencyEstimatesDisabled, DependencyDispatch: control.DependencyDispatchIndexOrder, EstimateReadPolicy: control.EstimateReadSuspendInPlace, IdleWaitPolicy: control.IdleWaitGosched, TraceMode: control.TraceCounters},
-			{ID: "detailed", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, MaxSpeculativeInflight: 1, DependencyMode: control.DependencyMVCCRuntime, DependencySource: control.DependencySourceRuntimeObserved, DependencyRepresentation: control.DependencyRepresentationVersionOnly, DependencyRepresentationBuilder: control.DependencyRepresentationBuilderNone, DependencyWaitPolicy: control.DependencyWaitNone, DependencyEstimateInjection: control.DependencyEstimatesDisabled, DependencyDispatch: control.DependencyDispatchIndexOrder, EstimateReadPolicy: control.EstimateReadSuspendInPlace, IdleWaitPolicy: control.IdleWaitGosched, TraceMode: control.TraceDetailed},
+			{ID: "off", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, MaxSpeculativeInflight: 2, DependencyDispatch: control.DependencyDispatchIndexOrder, EstimateReadPolicy: control.EstimateReadSuspendInPlace, IdleWaitPolicy: control.IdleWaitGosched, TraceMode: control.TraceOff},
+			{ID: "counters", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, MaxSpeculativeInflight: 2, DependencyDispatch: control.DependencyDispatchIndexOrder, EstimateReadPolicy: control.EstimateReadSuspendInPlace, IdleWaitPolicy: control.IdleWaitGosched, TraceMode: control.TraceCounters},
+			{ID: "detailed", Engine: "blockstm", Policy: "blockstm_preset", Executors: 2, MaxSpeculativeInflight: 1, DependencyDispatch: control.DependencyDispatchIndexOrder, EstimateReadPolicy: control.EstimateReadSuspendInPlace, IdleWaitPolicy: control.IdleWaitGosched, TraceMode: control.TraceDetailed},
 		},
 		Output: experiment.OutputConfig{
-			ValidationBundle:  filepath.Join(directory, "validation-bundle.json"),
 			ValidationRecords: filepath.Join(directory, "validation.jsonl"),
 			RunRecords:        filepath.Join(directory, "runs.jsonl"),
 			ActionTraces:      filepath.Join(directory, "traces.jsonl"),

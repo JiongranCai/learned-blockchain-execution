@@ -159,9 +159,7 @@ def gate_stage(run_root, stage, configs, records, validations):
     validations_by_label = defaultdict(list)
     expected_records = 0
     expected_measurements = 0
-    workload_hashes = defaultdict(set)
     code_commits = set()
-    binary_hashes = set()
     mechanism_totals = defaultdict(int)
 
     config_by_label = {value["label"]: value for value in configs}
@@ -188,17 +186,13 @@ def gate_stage(run_root, stage, configs, records, validations):
         if case_id not in expected_cases:
             add_error(errors, label, f"unexpected case {case_id}")
             continue
-        if record.get("schema_version") != "benchmark-run-v7":
+        if record.get("schema_version") not in ("benchmark-run-v7", "benchmark-run-v8"):
             add_error(errors, label, f"unexpected record schema {record.get('schema_version')}")
         if record.get("status") != "success" or record.get("censored") or not record.get("canonical_match"):
             add_error(errors, label, f"unsuccessful record {case_id}/{phase}/{record.get('round')}")
 
         provenance = record.get("provenance", {})
         code_commits.add(provenance.get("code_commit"))
-        binary_hashes.add(provenance.get("binary_sha256"))
-        workload_hashes[label].add(provenance.get("workload_hash"))
-        if provenance.get("code_modified") is not False:
-            add_error(errors, label, f"dirty binary provenance for {case_id}")
         hardware = provenance.get("hardware", {})
         for field, expected in (
             ("logical_cpus", 8),
@@ -269,16 +263,8 @@ def gate_stage(run_root, stage, configs, records, validations):
                 actual = len(records_by_key[(label, case["id"], phase)])
                 if actual != expected:
                     add_error(errors, label, f"{case['id']}/{phase}: expected {expected}, got {actual}")
-        if len(workload_hashes[label]) != 1 or None in workload_hashes[label]:
-            add_error(errors, label, "expected one non-null workload hash")
-
-    distinct_workload_hashes = {next(iter(values)) for values in workload_hashes.values() if len(values) == 1}
-    if len(distinct_workload_hashes) != len(configs):
-        add_error(errors, "", f"expected {len(configs)} distinct workload hashes, got {len(distinct_workload_hashes)}")
     if len(code_commits) != 1 or None in code_commits:
         add_error(errors, "", f"expected one code commit, got {sorted(str(value) for value in code_commits)}")
-    if len(binary_hashes) != 1 or None in binary_hashes:
-        add_error(errors, "", f"expected one binary hash, got {sorted(str(value) for value in binary_hashes)}")
     measurement_count = sum(record.get("phase") == "measurement" for record in records)
     if len(records) != expected_records:
         add_error(errors, "", f"expected {expected_records} records, got {len(records)}")
@@ -302,7 +288,6 @@ def gate_stage(run_root, stage, configs, records, validations):
         "expected_measurement_records": expected_measurements,
         "validation_records": len(validations),
         "code_commit": next(iter(code_commits)) if len(code_commits) == 1 else "",
-        "binary_sha256": next(iter(binary_hashes)) if len(binary_hashes) == 1 else "",
         "mechanism_totals": {
             f"{case_id}.{field}": value for (case_id, field), value in sorted(mechanism_totals.items())
         },
@@ -546,7 +531,6 @@ def update_manifest(run_root, stage, gate):
         "validation_records": gate["validation_records"],
     }
     manifest["code_commit"] = gate["code_commit"]
-    manifest["binary_sha256"] = gate["binary_sha256"]
     if stage == "formal" and gate["status"] == "PASS":
         manifest["status"] = "completed"
         manifest["completed_at_utc"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

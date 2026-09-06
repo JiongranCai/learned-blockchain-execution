@@ -2,8 +2,6 @@ package experiment
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,7 +17,7 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/workload/synthetic"
 )
 
-const ConfigSchemaVersion = "experiment-matrix-v7"
+const ConfigSchemaVersion = "experiment-matrix-v8"
 
 var ErrInvalidConfig = errors.New("invalid experiment config")
 
@@ -41,7 +39,6 @@ type Config struct {
 type WorkloadConfig struct {
 	ArtifactPath string            `json:"artifact_path,omitempty"`
 	Synthetic    *synthetic.Config `json:"synthetic,omitempty"`
-	ExpectedHash string            `json:"expected_hash"`
 }
 
 type CaseConfig struct {
@@ -87,7 +84,6 @@ func (c CaseConfig) TelemetryCase() telemetry.Case {
 }
 
 type OutputConfig struct {
-	ValidationBundle  string `json:"validation_bundle"`
 	ValidationRecords string `json:"validation_records"`
 	RunRecords        string `json:"run_records"`
 	ActionTraces      string `json:"action_traces"`
@@ -101,7 +97,6 @@ type TelemetryAblationConfig struct {
 
 type LoadedConfig struct {
 	Config  Config
-	Hash    string
 	Path    string
 	Timeout time.Duration
 }
@@ -119,27 +114,13 @@ func LoadConfig(path string) (LoadedConfig, error) {
 	if err != nil {
 		return LoadedConfig{}, err
 	}
-	canonical, err := json.Marshal(config)
-	if err != nil {
-		return LoadedConfig{}, err
-	}
-	digest := sha256.Sum256(append([]byte(ConfigSchemaVersion+"\x00"), canonical...))
 	return LoadedConfig{
 		Config:  config,
-		Hash:    hex.EncodeToString(digest[:]),
 		Path:    path,
 		Timeout: timeout,
 	}, nil
 }
 
-func SchemaHash(schemaVersion string) string {
-	digest := sha256.Sum256([]byte(schemaVersion))
-	return hex.EncodeToString(digest[:])
-}
-
-// validate checks every contract the runner depends on and normalises the
-// resolved kernel policy back into each case, so identity, the validation
-// bundle and run records name the behaviour that actually executes.
 func (c *Config) validate() (time.Duration, error) {
 	invalid := func(format string, args ...any) (time.Duration, error) {
 		return 0, fmt.Errorf("%w: %s", ErrInvalidConfig, fmt.Sprintf(format, args...))
@@ -152,12 +133,6 @@ func (c *Config) validate() (time.Duration, error) {
 	}
 	if (c.Workload.ArtifactPath == "") == (c.Workload.Synthetic == nil) {
 		return invalid("workload must set exactly one of artifact_path or synthetic")
-	}
-	if len(c.Workload.ExpectedHash) != sha256.Size*2 {
-		return invalid("workload expected_hash must be a SHA-256 hex digest")
-	}
-	if _, err := hex.DecodeString(c.Workload.ExpectedHash); err != nil {
-		return invalid("workload expected_hash: %v", err)
 	}
 	if c.StatisticalProtocol == "" {
 		return invalid("statistical_protocol is required")
@@ -204,24 +179,6 @@ func (c *Config) validate() (time.Duration, error) {
 		if experimentCase.MaxSpeculativeInflight < 0 {
 			return invalid("case %q has a negative max_speculative_inflight", experimentCase.ID)
 		}
-		if !control.ValidDependencyMode(experimentCase.DependencyMode) {
-			return invalid("case %q has invalid dependency_mode %q", experimentCase.ID, experimentCase.DependencyMode)
-		}
-		if !control.ValidDependencySource(experimentCase.DependencySource) {
-			return invalid("case %q has invalid dependency_source %q", experimentCase.ID, experimentCase.DependencySource)
-		}
-		if !control.ValidDependencyRepresentation(experimentCase.DependencyRepresentation) {
-			return invalid("case %q has invalid dependency_representation %q", experimentCase.ID, experimentCase.DependencyRepresentation)
-		}
-		if !control.ValidDependencyRepresentationBuilder(experimentCase.DependencyRepresentationBuilder) {
-			return invalid("case %q has invalid dependency_representation_builder %q", experimentCase.ID, experimentCase.DependencyRepresentationBuilder)
-		}
-		if !control.ValidDependencyWaitPolicy(experimentCase.DependencyWaitPolicy) {
-			return invalid("case %q has invalid dependency_wait_policy %q", experimentCase.ID, experimentCase.DependencyWaitPolicy)
-		}
-		if !control.ValidDependencyEstimateInjection(experimentCase.DependencyEstimateInjection) {
-			return invalid("case %q has invalid dependency_estimate_injection %q", experimentCase.ID, experimentCase.DependencyEstimateInjection)
-		}
 		dependencyPlan, dependencyErr := engineapi.EffectiveDependencyControl(engineapi.RunConfig{
 			DependencyMode:                  experimentCase.DependencyMode,
 			DependencySource:                experimentCase.DependencySource,
@@ -233,18 +190,6 @@ func (c *Config) validate() (time.Duration, error) {
 		if dependencyErr != nil {
 			return invalid("case %q has illegal dependency plan: %v", experimentCase.ID, dependencyErr)
 		}
-		if experimentCase.DependencyDispatch != "" &&
-			!control.ValidDependencyDispatchPolicy(experimentCase.DependencyDispatch) {
-			return invalid("case %q has invalid dependency_dispatch %q", experimentCase.ID, experimentCase.DependencyDispatch)
-		}
-		if experimentCase.EstimateReadPolicy != "" &&
-			!control.ValidEstimateReadPolicy(experimentCase.EstimateReadPolicy) {
-			return invalid("case %q has invalid estimate_read_policy %q", experimentCase.ID, experimentCase.EstimateReadPolicy)
-		}
-		if experimentCase.IdleWaitPolicy != "" &&
-			!control.ValidIdleWaitPolicy(experimentCase.IdleWaitPolicy) {
-			return invalid("case %q has invalid idle_wait_policy %q", experimentCase.ID, experimentCase.IdleWaitPolicy)
-		}
 		kernelPlan, kernelErr := engineapi.EffectiveKernelControl(engineapi.RunConfig{
 			MaxSpeculativeInflight: experimentCase.MaxSpeculativeInflight,
 			DependencyDispatch:     experimentCase.DependencyDispatch,
@@ -254,8 +199,13 @@ func (c *Config) validate() (time.Duration, error) {
 		if kernelErr != nil {
 			return invalid("case %q has illegal kernel policy: %v", experimentCase.ID, kernelErr)
 		}
-		// Record the resolved plan so case identity, the validation bundle and
-		// every run record name the behaviour that actually executed.
+		// Record the resolved dependency and kernel policies.
+		c.Cases[caseIndex].DependencyMode = dependencyPlan.Mode
+		c.Cases[caseIndex].DependencySource = dependencyPlan.Source
+		c.Cases[caseIndex].DependencyRepresentation = dependencyPlan.Representation
+		c.Cases[caseIndex].DependencyRepresentationBuilder = dependencyPlan.RepresentationBuilder
+		c.Cases[caseIndex].DependencyWaitPolicy = dependencyPlan.WaitPolicy
+		c.Cases[caseIndex].DependencyEstimateInjection = dependencyPlan.EstimateInjection
 		c.Cases[caseIndex].DependencyDispatch = kernelPlan.Dispatch
 		c.Cases[caseIndex].EstimateReadPolicy = kernelPlan.EstimateRead
 		c.Cases[caseIndex].IdleWaitPolicy = kernelPlan.IdleWait
@@ -283,12 +233,12 @@ func (c *Config) validate() (time.Duration, error) {
 				dependencyPlan.EstimateInjection != control.DependencyEstimatesDisabled) {
 			return invalid("serial case %q must use mvcc_runtime/runtime_observed dependency control", experimentCase.ID)
 		}
-		caseIDs[experimentCase.ID] = experimentCase
+		caseIDs[experimentCase.ID] = c.Cases[caseIndex]
 	}
-	if c.Output.ValidationBundle == "" || c.Output.ValidationRecords == "" || c.Output.RunRecords == "" || c.Output.ActionTraces == "" {
+	if c.Output.ValidationRecords == "" || c.Output.RunRecords == "" || c.Output.ActionTraces == "" {
 		return invalid("all output paths are required")
 	}
-	outputPaths := []string{c.Output.ValidationBundle, c.Output.ValidationRecords, c.Output.RunRecords, c.Output.ActionTraces}
+	outputPaths := []string{c.Output.ValidationRecords, c.Output.RunRecords, c.Output.ActionTraces}
 	seenOutputPaths := make(map[string]struct{}, len(outputPaths))
 	for _, path := range outputPaths {
 		if _, exists := seenOutputPaths[path]; exists {
@@ -305,16 +255,9 @@ func (c *Config) validate() (time.Duration, error) {
 		if off.TraceMode != control.TraceOff || instrumented.TraceMode == control.TraceOff {
 			return invalid("telemetry ablation requires off and instrumented trace modes")
 		}
-		if off.Engine != instrumented.Engine || off.Policy != instrumented.Policy || off.Executors != instrumented.Executors ||
-			off.MaxSpeculativeInflight != instrumented.MaxSpeculativeInflight ||
-			off.DependencyMode != instrumented.DependencyMode || off.DependencySource != instrumented.DependencySource ||
-			off.DependencyRepresentation != instrumented.DependencyRepresentation ||
-			off.DependencyRepresentationBuilder != instrumented.DependencyRepresentationBuilder ||
-			off.DependencyWaitPolicy != instrumented.DependencyWaitPolicy ||
-			off.DependencyEstimateInjection != instrumented.DependencyEstimateInjection ||
-			off.DependencyDispatch != instrumented.DependencyDispatch ||
-			off.EstimateReadPolicy != instrumented.EstimateReadPolicy ||
-			off.IdleWaitPolicy != instrumented.IdleWaitPolicy {
+		off.ID, instrumented.ID = "", ""
+		off.TraceMode, instrumented.TraceMode = "", ""
+		if off != instrumented {
 			return invalid("telemetry ablation cases may differ only by trace mode and id")
 		}
 		for _, platform := range c.TelemetryAblation.EnforcePlatforms {

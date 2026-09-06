@@ -1,9 +1,6 @@
 package experiment
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -34,29 +31,20 @@ type StatisticalProtocol struct {
 	PilotSeparation              string   `json:"pilot_separation"`
 }
 
-type LoadedProtocol struct {
-	Protocol StatisticalProtocol
-	Hash     string
-}
-
-func LoadStatisticalProtocol(path string) (LoadedProtocol, error) {
+func LoadStatisticalProtocol(path string) (StatisticalProtocol, error) {
 	encoded, err := os.ReadFile(path)
 	if err != nil {
-		return LoadedProtocol{}, err
+		return StatisticalProtocol{}, err
 	}
 	var protocol StatisticalProtocol
 	if err := decodeStrict(encoded, &protocol); err != nil {
-		return LoadedProtocol{}, fmt.Errorf("%w: %v", ErrInvalidStatisticalProtocol, err)
+		return StatisticalProtocol{}, fmt.Errorf("%w: %v", ErrInvalidStatisticalProtocol, err)
 	}
 	if err := protocol.Validate(); err != nil {
-		return LoadedProtocol{}, err
+		return StatisticalProtocol{}, err
 	}
-	canonical, err := json.Marshal(protocol)
-	if err != nil {
-		return LoadedProtocol{}, err
-	}
-	digest := sha256.Sum256(append([]byte(StatisticalProtocolSchemaVersion+"\x00"), canonical...))
-	return LoadedProtocol{Protocol: protocol, Hash: hex.EncodeToString(digest[:])}, nil
+
+	return protocol, nil
 }
 
 func (p StatisticalProtocol) Validate() error {
@@ -82,9 +70,6 @@ func (p StatisticalProtocol) Validate() error {
 	if p.P99MinimumTransactions <= 0 || p.MultipleComparisonCorrection == "" || p.OutlierPolicy == "" ||
 		p.TimeoutPolicy == "" || p.CrashOOMPolicy == "" || p.PilotSeparation == "" {
 		return invalid("handling rules must be explicit")
-	}
-	if len(p.RankingReversalRequirements) != 4 {
-		return invalid("ranking reversal must have exactly four frozen requirements")
 	}
 	return nil
 }

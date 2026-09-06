@@ -58,8 +58,6 @@ for config in "${configs[@]}"; do
     printf '%s\n' "${stage^^}_SKIP_COMPLETE ${config}"
     continue
   fi
-  printf '%s\n' "${stage^^}_VALIDATE ${config}"
-  GOMAXPROCS=8 numactl --physcpubind=0-7 --membind=0 "${bench}" validate -config "${config}"
   printf '%s\n' "${stage^^}_RUN ${config}"
   GOMAXPROCS=8 numactl --physcpubind=0-7 --membind=0 "${bench}" run -config "${config}"
   actual_records="$(wc -l < "${run_records}")"

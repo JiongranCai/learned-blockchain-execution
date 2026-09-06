@@ -32,53 +32,6 @@ func WriteJSONLines(path string, values []any) error {
 	return file.Close()
 }
 
-func WriteJSON(path string, value any) error {
-	if err := ensureParent(path); err != nil {
-		return err
-	}
-	directory := filepath.Dir(path)
-	temporary, err := os.CreateTemp(directory, ".validation-*.json")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	cleanup := func() {
-		_ = temporary.Close()
-		_ = os.Remove(temporaryPath)
-	}
-	encoder := json.NewEncoder(temporary)
-	encoder.SetEscapeHTML(false)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(value); err != nil {
-		cleanup()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		cleanup()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		cleanup()
-		return err
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		cleanup()
-		return err
-	}
-	return nil
-}
-
-func ReadJSON(path string, target any) error {
-	encoded, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	if err := decodeStrict(encoded, target); err != nil {
-		return fmt.Errorf("decode %s: %w", path, err)
-	}
-	return nil
-}
-
 func ensureParent(path string) error {
 	if path == "" {
 		return fmt.Errorf("output path is empty")

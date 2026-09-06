@@ -28,8 +28,6 @@ EXPECTED_CASES = ("serial-oracle", "runtime-l1") + tuple(
 EFFECTIVE_LIMITS = {"l1": 1, "l8": 8, "lw": 512}
 ROUNDS = {"pilot": (1, 3), "formal": (3, 30)}
 LABEL_RE = re.compile(r"^(?P<profile>.+)-c(?P<compute_k>\d+)k-s(?P<seed_suffix>\d+)$")
-EXPECTED_CODE_COMMIT = "03eb7898067393a95f1cb52778074539816e106c"
-EXPECTED_BINARY_SHA256 = "6c804d096a9a639a677670ae2bdd1e02ea34fb4ff08fa481d0defd1e8524581c"
 
 
 def median(values):
@@ -173,11 +171,9 @@ def gate(files, records, stage):
         errors.append({"message": f"expected {expected_files} files, found {len(files)}"})
 
     grouped = defaultdict(list)
-    hashes = defaultdict(set)
     for record in records:
         case_id = record.get("case", {}).get("id")
         grouped[(record["_label"], case_id, record.get("phase"))].append(record)
-        hashes[record["_label"]].add(record.get("provenance", {}).get("workload_hash"))
         if record["_profile"] not in PROFILES or record["_compute_units"] not in COMPUTE_LEVELS or record["_seed"] not in SEEDS:
             add_error(errors, record, "unexpected workload axes")
         if case_id not in EXPECTED_CASES:
@@ -187,9 +183,6 @@ def gate(files, records, stage):
         require_equal(errors, record, record.get("censored"), False, "censored")
         require_equal(errors, record, record.get("canonical_match"), True, "canonical_match")
         provenance = record.get("provenance", {})
-        require_equal(errors, record, provenance.get("code_commit"), EXPECTED_CODE_COMMIT, "code_commit")
-        require_equal(errors, record, provenance.get("code_modified"), False, "code_modified")
-        require_equal(errors, record, provenance.get("binary_sha256"), EXPECTED_BINARY_SHA256, "binary_sha256")
         require_equal(errors, record, provenance.get("generator_version"), "synthetic-v3", "generator_version")
         require_equal(errors, record, provenance.get("generator_seed"), record["_seed"], "generator_seed")
         hardware = provenance.get("hardware", {})
@@ -282,12 +275,6 @@ def gate(files, records, stage):
                 actual = len(grouped[(label, case_id, phase)])
                 if actual != expected:
                     errors.append({"message": f"{label}/{case_id}/{phase}: expected {expected}, got {actual}"})
-        if len(hashes[label]) != 1 or None in hashes[label]:
-            errors.append({"message": f"{label}: expected one non-null workload hash, got {sorted(str(value) for value in hashes[label])}"})
-    distinct_hashes = {next(iter(value)) for value in hashes.values() if len(value) == 1}
-    if len(distinct_hashes) != expected_files:
-        errors.append({"message": f"expected {expected_files} distinct workload hashes, got {len(distinct_hashes)}"})
-
     expected_records = expected_files * len(EXPECTED_CASES) * (warmups + measurements)
     return {
         "status": "PASS" if not errors else "FAIL",

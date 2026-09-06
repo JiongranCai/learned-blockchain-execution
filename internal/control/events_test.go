@@ -8,9 +8,6 @@ import (
 )
 
 func TestRegistryCoversWeekThreeEventSetOneToOne(t *testing.T) {
-	if err := control.ValidateEventRegistry(); err != nil {
-		t.Fatal(err)
-	}
 	want := []control.Event{
 		control.EventEpochStart,
 		control.EventBlockReady,

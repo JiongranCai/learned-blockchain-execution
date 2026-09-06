@@ -2,8 +2,6 @@ package workload
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,11 +12,10 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/state/memkv"
 )
 
-const ArtifactSchemaVersion = "workload-artifact-v1"
+const ArtifactSchemaVersion = "workload-artifact-v2"
 
 var (
 	ErrInvalidArtifact = errors.New("invalid workload artifact")
-	ErrHashMismatch    = errors.New("workload artifact canonical hash mismatch")
 )
 
 type GeneratorDescriptor struct {
@@ -78,7 +75,7 @@ const (
 )
 
 // MetadataRecord is the only workload metadata eligible for explicit engine
-// exposure. Payload integrity and acquisition semantics travel with the data.
+// exposure, with its source and acquisition semantics.
 type MetadataRecord struct {
 	ID              string         `json:"id"`
 	TargetID        string         `json:"target_id"`
@@ -90,8 +87,6 @@ type MetadataRecord struct {
 	AcquisitionCost uint64         `json:"acquisition_cost"`
 	MissSemantics   string         `json:"miss_semantics"`
 	Payload         []byte         `json:"payload"`
-	Size            uint64         `json:"size"`
-	Hash            string         `json:"hash"`
 }
 
 func NewMetadataRecord(
@@ -106,7 +101,6 @@ func NewMetadataRecord(
 	missSemantics string,
 	payload []byte,
 ) MetadataRecord {
-	digest := sha256.Sum256(payload)
 	return MetadataRecord{
 		ID:              id,
 		TargetID:        targetID,
@@ -118,13 +112,10 @@ func NewMetadataRecord(
 		AcquisitionCost: acquisitionCost,
 		MissSemantics:   missSemantics,
 		Payload:         cloneBytes(payload),
-		Size:            uint64(len(payload)),
-		Hash:            hex.EncodeToString(digest[:]),
 	}
 }
 
-// Artifact is the complete, immutable input/audit record for one generated
-// workload. CanonicalHash authenticates every field except itself.
+// Artifact contains the input and ground truth for one generated workload.
 type Artifact struct {
 	SchemaVersion          string                   `json:"schema_version"`
 	Generator              GeneratorDescriptor      `json:"generator"`
@@ -133,50 +124,15 @@ type Artifact struct {
 	LogicalArrivalSchedule []LogicalArrival         `json:"logical_arrival_schedule"`
 	GroundTruth            []TransactionGroundTruth `json:"ground_truth"`
 	EngineVisibleMetadata  []MetadataRecord         `json:"engine_visible_metadata"`
-	CanonicalHash          string                   `json:"canonical_hash"`
 }
 
 // ExecutionInput contains only data available to an execution run. In
 // particular, generator ground truth is not representable in this type.
 type ExecutionInput struct {
-	ArtifactHash           string             `json:"artifact_hash"`
 	InitialState           []model.StateEntry `json:"initial_state"`
 	OrderedBlocks          []model.Block      `json:"ordered_blocks"`
 	LogicalArrivalSchedule []LogicalArrival   `json:"logical_arrival_schedule"`
 	Metadata               []MetadataRecord   `json:"metadata"`
-}
-
-// Seal validates the artifact body and installs its canonical hash.
-func (a *Artifact) Seal() error {
-	if a == nil {
-		return invalidArtifact("artifact is nil")
-	}
-	if err := a.validateBody(); err != nil {
-		return err
-	}
-	digest, err := a.computeCanonicalHash()
-	if err != nil {
-		return err
-	}
-	a.CanonicalHash = digest
-	return nil
-}
-
-func (a Artifact) Validate() error {
-	if err := a.validateBody(); err != nil {
-		return err
-	}
-	if a.CanonicalHash == "" {
-		return invalidArtifact("canonical_hash is required")
-	}
-	want, err := a.computeCanonicalHash()
-	if err != nil {
-		return err
-	}
-	if a.CanonicalHash != want {
-		return fmt.Errorf("%w: got %s, want %s", ErrHashMismatch, a.CanonicalHash, want)
-	}
-	return nil
 }
 
 func (a Artifact) Descriptor() ([]byte, error) {
@@ -206,13 +162,6 @@ func ParseDescriptor(encoded []byte) (Artifact, error) {
 	return artifact, nil
 }
 
-func (a Artifact) DescriptorDigest() (string, error) {
-	if err := a.Validate(); err != nil {
-		return "", err
-	}
-	return a.CanonicalHash, nil
-}
-
 func (a Artifact) NewState() (*memkv.Store, error) {
 	if err := a.Validate(); err != nil {
 		return nil, err
@@ -223,15 +172,6 @@ func (a Artifact) NewState() (*memkv.Store, error) {
 // ExecutionInput returns a deep-cloned engine view filtered to explicitly
 // allowed metadata sources. Passing no sources exposes no metadata.
 func (a Artifact) ExecutionInput(allowedSources ...MetadataSource) (ExecutionInput, error) {
-	descriptor, err := a.Descriptor()
-	if err != nil {
-		return ExecutionInput{}, err
-	}
-	clone, err := ParseDescriptor(descriptor)
-	if err != nil {
-		return ExecutionInput{}, err
-	}
-
 	allowed := make(map[MetadataSource]struct{}, len(allowedSources))
 	for _, source := range allowedSources {
 		if !validMetadataSource(source) {
@@ -239,56 +179,33 @@ func (a Artifact) ExecutionInput(allowedSources ...MetadataSource) (ExecutionInp
 		}
 		allowed[source] = struct{}{}
 	}
-	metadata := make([]MetadataRecord, 0, len(clone.EngineVisibleMetadata))
-	for _, record := range clone.EngineVisibleMetadata {
+	metadata := make([]MetadataRecord, 0, len(a.EngineVisibleMetadata))
+	for _, record := range a.EngineVisibleMetadata {
 		if _, ok := allowed[record.Source]; ok {
 			metadata = append(metadata, record)
 		}
 	}
 
-	return ExecutionInput{
-		ArtifactHash:           clone.CanonicalHash,
-		InitialState:           clone.InitialState,
-		OrderedBlocks:          clone.OrderedBlocks,
-		LogicalArrivalSchedule: clone.LogicalArrivalSchedule,
+	input := ExecutionInput{
+		InitialState:           a.InitialState,
+		OrderedBlocks:          a.OrderedBlocks,
+		LogicalArrivalSchedule: a.LogicalArrivalSchedule,
 		Metadata:               metadata,
-	}, nil
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return ExecutionInput{}, err
+	}
+	var clone ExecutionInput
+	err = json.Unmarshal(encoded, &clone)
+	return clone, err
 }
 
 func (input ExecutionInput) NewState() (*memkv.Store, error) {
 	return memkv.FromEntries(input.InitialState)
 }
 
-func (a Artifact) computeCanonicalHash() (string, error) {
-	payload := struct {
-		SchemaVersion          string                   `json:"schema_version"`
-		Generator              GeneratorDescriptor      `json:"generator"`
-		InitialState           []model.StateEntry       `json:"initial_state"`
-		OrderedBlocks          []model.Block            `json:"ordered_blocks"`
-		LogicalArrivalSchedule []LogicalArrival         `json:"logical_arrival_schedule"`
-		GroundTruth            []TransactionGroundTruth `json:"ground_truth"`
-		EngineVisibleMetadata  []MetadataRecord         `json:"engine_visible_metadata"`
-	}{
-		SchemaVersion:          a.SchemaVersion,
-		Generator:              a.Generator,
-		InitialState:           a.InitialState,
-		OrderedBlocks:          a.OrderedBlocks,
-		LogicalArrivalSchedule: a.LogicalArrivalSchedule,
-		GroundTruth:            a.GroundTruth,
-		EngineVisibleMetadata:  a.EngineVisibleMetadata,
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return "", err
-	}
-	h := sha256.New()
-	_, _ = h.Write([]byte(ArtifactSchemaVersion))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write(encoded)
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-func (a Artifact) validateBody() error {
+func (a Artifact) Validate() error {
 	if a.SchemaVersion != ArtifactSchemaVersion {
 		return invalidArtifact("schema_version must be %q", ArtifactSchemaVersion)
 	}
@@ -304,20 +221,14 @@ func (a Artifact) validateBody() error {
 		}
 	}
 
-	blockIDs := make(map[string]struct{}, len(a.OrderedBlocks))
 	logicalIDs := make(map[string]struct{})
 	txIDs := make(map[string]string)
 	txOrder := make([]string, 0)
 	txOperations := make(map[string]map[string]model.Instruction)
-	operationIDs := make(map[string]struct{})
 	for _, block := range a.OrderedBlocks {
 		if block.ID == "" {
 			return invalidArtifact("block id is required")
 		}
-		if _, exists := blockIDs[block.ID]; exists {
-			return invalidArtifact("duplicate block id %q", block.ID)
-		}
-		blockIDs[block.ID] = struct{}{}
 		if _, exists := logicalIDs[block.ID]; exists {
 			return invalidArtifact("duplicate logical id %q", block.ID)
 		}
@@ -325,9 +236,6 @@ func (a Artifact) validateBody() error {
 		for _, transaction := range block.Transactions {
 			if transaction.ID == "" {
 				return invalidArtifact("transaction id is required")
-			}
-			if _, exists := txIDs[transaction.ID]; exists {
-				return invalidArtifact("duplicate transaction id %q", transaction.ID)
 			}
 			txIDs[transaction.ID] = block.ID
 			if _, exists := logicalIDs[transaction.ID]; exists {
@@ -340,10 +248,6 @@ func (a Artifact) validateBody() error {
 				if instruction.ID == "" {
 					return invalidArtifact("transaction %q has an operation without id", transaction.ID)
 				}
-				if _, exists := operationIDs[instruction.ID]; exists {
-					return invalidArtifact("duplicate operation id %q", instruction.ID)
-				}
-				operationIDs[instruction.ID] = struct{}{}
 				if _, exists := logicalIDs[instruction.ID]; exists {
 					return invalidArtifact("duplicate logical id %q", instruction.ID)
 				}
@@ -424,13 +328,6 @@ func (a Artifact) validateBody() error {
 		}
 		if record.MissSemantics == "" {
 			return invalidArtifact("metadata %q miss_semantics is required", record.ID)
-		}
-		if record.Size != uint64(len(record.Payload)) {
-			return invalidArtifact("metadata %q size mismatch", record.ID)
-		}
-		digest := sha256.Sum256(record.Payload)
-		if record.Hash != hex.EncodeToString(digest[:]) {
-			return invalidArtifact("metadata %q hash mismatch", record.ID)
 		}
 	}
 	return nil

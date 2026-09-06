@@ -1,6 +1,6 @@
 # Experiment configuration contracts
 
-`experiment-matrix-v7` is the only input contract accepted by `bench validate` and `bench run`. Parsing rejects unknown fields, duplicate case identifiers, unsupported engines or policies, invalid trace modes, ambiguous workload sources, unfrozen workload hashes, implicit environment controls, negative speculation limits, invalid serial controls, illegal dependency source/representation/consumer combinations, illegal kernel execution policies, and formal configurations with placeholder affinity, NUMA, or page-cache values.
+`experiment-matrix-v8` is accepted by `bench run` and `bench validate`. The runner checks configuration syntax and supported execution combinations, and records the resolved defaults for omitted dependency and kernel controls. `bench run` performs serial differential validation automatically, then measures the cases in fresh processes. Outputs are validation records, run records, and optional detailed traces; there is no validation bundle or expected workload hash.
 
 ## Execution controls
 
@@ -38,7 +38,7 @@ CQ3-R telemetry records representation kind and builder, build time and determin
 
 CQ3-U telemetry records the resolved wait and estimate consumers, gate lookups/traversal/resolution, actual waits, estimate build/payload, and remaining reexecution work. A wait-only case must have zero estimate payload; an estimates-only case must have zero plan lookups and dependency waits.
 
-The three kernel policies change only when work happens, never what a block commits. All three fields are optional. An omitted field resolves to the non-blocking behaviour when it is available — `abort_and_reschedule`, `park`, and `ready_queue` for a plan that has a wait consumer — and falls back to the frozen upstream value when it is not. An explicit field is never downgraded: an explicit non-frozen policy with a finite `max_speculative_inflight` is refused, because the admission limiter keeps separate stable-frontier bookkeeping; an explicit `ready_queue` without a wait consumer is refused because there is nothing to gate on; and an explicit `suspend_yield_worker` with `idle_wait_policy=gosched` is refused because a freed worker that spins consumes the capacity that policy exists to release. Omitting `idle_wait_policy` under `suspend_yield_worker` resolves it to `park`. The resolved plan is written back into the case, so identity, the validation bundle and every run record name the behaviour that actually executed. A case that resolves to the frozen triple routes through the untouched upstream entry point and reports `kernel_policy.applied=false` with zero policy counters. Range reads keep frozen suspend-in-place semantics, so the non-default estimate policies are unavailable to iterating transactions; the deterministic flat runtime never iterates.
+The three kernel policies change only when work happens, never what a block commits. All three fields are optional. An omitted field resolves to the non-blocking behaviour when it is available — `abort_and_reschedule`, `park`, and `ready_queue` for a plan that has a wait consumer — and falls back to the frozen upstream value when it is not. An explicit field is never downgraded: an explicit non-frozen policy with a finite `max_speculative_inflight` is refused, because the admission limiter keeps separate stable-frontier bookkeeping; an explicit `ready_queue` without a wait consumer is refused because there is nothing to gate on; and an explicit `suspend_yield_worker` with `idle_wait_policy=gosched` is refused because a freed worker that spins consumes the capacity that policy exists to release. Omitting `idle_wait_policy` under `suspend_yield_worker` resolves it to `park`. The resolved plan is written back into the case, so every run record names the behaviour that actually executed. A case that resolves to the frozen triple routes through the untouched upstream entry point and reports `kernel_policy.applied=false` with zero policy counters. Range reads keep frozen suspend-in-place semantics, so the non-default estimate policies are unavailable to iterating transactions; the deterministic flat runtime never iterates.
 
 Kernel policy telemetry reports what a run actually did: `estimate_suspends` / `estimate_suspend_ns`, `estimate_aborts`, `dispatch_deferrals`, `ready_queue_dispatches`, `worker_yields`, `idle_parks`, and `peak_runnable_workers`. An attempt discarded by `abort_and_reschedule` is charged the work it consumed and is reported as a replay with reason `estimate_dependency_abort`, not as a validation failure, so `validation_failures` stays specific to validation. `peak_runnable_workers` bounds how far `suspend_yield_worker` exceeded the configured executor count while replacing parked workers; a run whose peak is far above the executor count is comparing two things at once and should be read with that in mind.
 
@@ -48,9 +48,11 @@ Static program accesses are conservative syntactic sets. The current flat runtim
 
 ## Measurement boundary
 
-The performance interval begins immediately before `Engine.ExecuteBlock` and ends immediately after it returns. State materialization and engine/policy construction happen before the interval. Canonical hashing, expected-digest comparison, JSON encoding, and trace output happen afterward. State publication remains inside the interval.
+The performance interval begins immediately before `Engine.ExecuteBlock` and ends immediately after it returns. State materialization and engine/policy construction happen before the interval. Execution-result digest computation and comparison, JSON encoding, and trace output happen afterward. State publication remains inside the interval.
 
 The parent runner balances case order once per round with the frozen `order_seed`. Every scheduled case runs in a fresh worker process. Warmup records are retained and marked `phase=warmup`; analyses exclude them from measurement summaries rather than deleting them. `counters` is the formal low-cost telemetry mode, `detailed` captures action-level diagnostics, and `off` supports telemetry-overhead ablations.
+
+Reproducibility records retain the Git revision and modified flag, config path, generator version and seed, hardware, and run settings. Preserve the config alongside the results. Config, binary, protocol, schema, and workload integrity hashes are not required. v7 configs and v1 workload descriptors belong to historical revisions; current benchmark/validation records use v8, while the unchanged action-trace format stays at v7.
 
 ## Statistical protocol
 
@@ -70,7 +72,7 @@ Smoke matrices may use fewer rounds, but their records remain pilot evidence and
 
 ## Experiment families
 
-`experiments/baseline/` exercises the serial oracle, Block-STM adapter, validation bundle, telemetry modes, and isolated runner process. Its Linux formal template remains intentionally invalid until target-host controls are frozen.
+`experiments/baseline/` exercises the serial oracle, Block-STM adapter, telemetry modes, and isolated runner process. Its Linux formal template remains intentionally invalid until target-host controls are frozen.
 
 `experiments/speculation-window/` freezes `P=8` and compares the distinct effective admission choices `1/P/4P/W`. The anchor matrices contrast expensive low-conflict work with a cheap single-key hotspot chain. Boundary matrices keep the seed, transaction count, compute distribution, workers, and all other controls fixed while changing only `key_space` from 1 through 3. The hotspot/cold-tail matrix keeps `key_space=8192` while concentrating accesses on a small hot head and explicitly controlling read/write correlation.
 

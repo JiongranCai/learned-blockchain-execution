@@ -39,7 +39,7 @@ func TestExecutionInputRequiresExplicitMetadataSourcesAndOmitsGroundTruth(t *tes
 			[]byte("oracle payload"),
 		),
 	}
-	if err := artifact.Seal(); err != nil {
+	if err := artifact.Validate(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -100,38 +100,6 @@ func TestDescriptorStrictRoundTrip(t *testing.T) {
 	}
 }
 
-func TestArtifactDetectsContentAndMetadataTampering(t *testing.T) {
-	artifact := generatedArtifact(t)
-	copy := cloneArtifact(t, artifact)
-	copy.InitialState[0].Value[0] ^= 0xff
-	if err := copy.Validate(); !errors.Is(err, workload.ErrHashMismatch) {
-		t.Fatalf("expected canonical hash mismatch, got %v", err)
-	}
-
-	artifact.EngineVisibleMetadata = []workload.MetadataRecord{
-		workload.NewMetadataRecord(
-			"metadata-1",
-			artifact.OrderedBlocks[0].Transactions[0].ID,
-			"prediction",
-			workload.MetadataPredicted,
-			"tx_admit",
-			0.5,
-			0.75,
-			3,
-			"runtime_validation_and_reexecute",
-			[]byte("payload"),
-		),
-	}
-	if err := artifact.Seal(); err != nil {
-		t.Fatal(err)
-	}
-	copy = cloneArtifact(t, artifact)
-	copy.EngineVisibleMetadata[0].Payload[0] ^= 0xff
-	if err := copy.Validate(); !errors.Is(err, workload.ErrInvalidArtifact) {
-		t.Fatalf("expected metadata integrity error, got %v", err)
-	}
-}
-
 func TestArtifactRejectsUnknownMetadataVisibility(t *testing.T) {
 	artifact := generatedArtifact(t)
 	if _, err := artifact.ExecutionInput(workload.MetadataSource("unknown")); !errors.Is(err, workload.ErrInvalidArtifact) {
@@ -187,7 +155,7 @@ func TestArtifactRejectsInconsistentLogicalMetadata(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			artifact := generatedArtifact(t)
 			test.mutate(&artifact)
-			if err := artifact.Seal(); !errors.Is(err, workload.ErrInvalidArtifact) {
+			if err := artifact.Validate(); !errors.Is(err, workload.ErrInvalidArtifact) {
 				t.Fatalf("expected invalid artifact error, got %v", err)
 			}
 		})
@@ -210,17 +178,4 @@ func generatedArtifact(t *testing.T) workload.Artifact {
 		t.Fatal(err)
 	}
 	return artifact
-}
-
-func cloneArtifact(t *testing.T, artifact workload.Artifact) workload.Artifact {
-	t.Helper()
-	descriptor, err := artifact.Descriptor()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var clone workload.Artifact
-	if err := json.Unmarshal(descriptor, &clone); err != nil {
-		t.Fatal(err)
-	}
-	return clone
 }

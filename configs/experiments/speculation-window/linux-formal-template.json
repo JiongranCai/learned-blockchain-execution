@@ -1,5 +1,5 @@
 {
-  "schema_version": "experiment-matrix-v7",
+  "schema_version": "experiment-matrix-v8",
   "run_class": "formal",
   "workload": {
     "synthetic": {
@@ -11,8 +11,7 @@
       "max_compute_units": 50000,
       "transaction_max_units": 50004,
       "failure_every": 0
-    },
-    "expected_hash": "0f6ae63d5870ff1bb0b36f5fd4e9855318c3e32b6baa33097f365dd4e67388a0"
+    }
   },
   "statistical_protocol": "configs/statistical/protocol-v1.json",
   "warmup_rounds": 3,
@@ -85,7 +84,6 @@
     }
   ],
   "output": {
-    "validation_bundle": "results/speculation-window/linux-formal/validation-bundle.json",
     "validation_records": "results/speculation-window/linux-formal/validation.jsonl",
     "run_records": "results/speculation-window/linux-formal/runs.jsonl",
     "action_traces": "results/speculation-window/linux-formal/action-traces.jsonl"

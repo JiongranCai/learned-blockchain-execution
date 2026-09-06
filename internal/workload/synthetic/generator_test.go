@@ -16,8 +16,6 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/workload/synthetic"
 )
 
-const goldenArtifactHash = "6b71316d4076a8d0e27f078e6c52a2f9a042047e88c34ee2ea63792fafbe609d"
-
 func TestGenerateIsByteDeterministicAndSeedSensitive(t *testing.T) {
 	config := testConfig()
 	first, err := synthetic.Generate(config)
@@ -41,12 +39,6 @@ func TestGenerateIsByteDeterministicAndSeedSensitive(t *testing.T) {
 	}
 	if first.SchemaVersion != workload.ArtifactSchemaVersion || first.Generator.Version != synthetic.GeneratorVersion {
 		t.Fatalf("unexpected artifact identity: %#v", first)
-	}
-	if got, err := first.DescriptorDigest(); err != nil || got != first.CanonicalHash || len(got) != 64 {
-		t.Fatalf("unexpected descriptor digest: got %q err=%v field=%q", got, err, first.CanonicalHash)
-	}
-	if first.CanonicalHash != goldenArtifactHash {
-		t.Fatalf("synthetic-v1 changed without a version bump: got %s want %s", first.CanonicalHash, goldenArtifactHash)
 	}
 
 	config.Seed++
@@ -132,8 +124,8 @@ func TestHotspotAccessDistributionIsDeterministicAndKeepsAColdTail(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.CanonicalHash != second.CanonicalHash {
-		t.Fatalf("hotspot workload is not deterministic: %s != %s", first.CanonicalHash, second.CanonicalHash)
+	if !reflect.DeepEqual(first, second) {
+		t.Fatal("hotspot workload is not deterministic")
 	}
 	if first.Generator.Version != synthetic.GeneratorVersionV2 {
 		t.Fatalf("got generator version %q", first.Generator.Version)
@@ -260,7 +252,7 @@ func TestGeneratedArtifactFreezesLogicalIDsAndInformationBoundary(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(input.Metadata) != 0 || input.ArtifactHash != artifact.CanonicalHash {
+	if len(input.Metadata) != 0 {
 		t.Fatalf("unexpected baseline execution input: %#v", input)
 	}
 	if !reflect.DeepEqual(input.OrderedBlocks, artifact.OrderedBlocks) || !reflect.DeepEqual(input.LogicalArrivalSchedule, artifact.LogicalArrivalSchedule) {

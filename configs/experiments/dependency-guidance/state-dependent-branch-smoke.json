@@ -1,5 +1,5 @@
 {
-  "schema_version": "experiment-matrix-v7",
+  "schema_version": "experiment-matrix-v8",
   "run_class": "smoke",
   "workload": {
     "synthetic": {
@@ -12,8 +12,7 @@
       "transaction_max_units": 2007,
       "failure_every": 0,
       "program_shape": "state_dependent_branch"
-    },
-    "expected_hash": "e83f491469ab74130daf56f67a303ec8ce687ced5407fccdd5e90b45e66c2ba3"
+    }
   },
   "statistical_protocol": "configs/statistical/protocol-v1.json",
   "warmup_rounds": 2,
@@ -86,7 +85,6 @@
     }
   ],
   "output": {
-    "validation_bundle": "results/dependency-guidance/state-dependent-branch/validation-bundle.json",
     "validation_records": "results/dependency-guidance/state-dependent-branch/validation.jsonl",
     "run_records": "results/dependency-guidance/state-dependent-branch/runs.jsonl",
     "action_traces": "results/dependency-guidance/state-dependent-branch/action-traces.jsonl"

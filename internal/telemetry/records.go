@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	BenchmarkRecordSchema  = "benchmark-run-v7"
-	ValidationRecordSchema = "validation-run-v7"
+	BenchmarkRecordSchema  = "benchmark-run-v8"
+	ValidationRecordSchema = "validation-run-v8"
 	ActionTraceSchema      = "action-trace-v7"
 	AblationRecordSchema   = "telemetry-ablation-v1"
 )
@@ -44,19 +44,14 @@ type Environment struct {
 }
 
 type Provenance struct {
+	ConfigPath               string      `json:"config_path"`
 	CodeCommit               string      `json:"code_commit"`
 	CodeModified             bool        `json:"code_modified"`
-	BinarySHA256             string      `json:"binary_sha256"`
 	ProcessID                int         `json:"process_id"`
 	UpstreamCommit           string      `json:"upstream_commit"`
 	ConfigSchemaVersion      string      `json:"config_schema_version"`
-	ConfigSchemaHash         string      `json:"config_schema_hash"`
-	ConfigHash               string      `json:"config_hash"`
 	StatisticalSchemaVersion string      `json:"statistical_schema_version"`
-	StatisticalSchemaHash    string      `json:"statistical_schema_hash"`
-	StatisticalProtocolHash  string      `json:"statistical_protocol_hash"`
 	WorkloadSchemaVersion    string      `json:"workload_schema_version"`
-	WorkloadHash             string      `json:"workload_hash"`
 	GeneratorVersion         string      `json:"generator_version"`
 	GeneratorSeed            int64       `json:"generator_seed"`
 	Hardware                 Hardware    `json:"hardware"`

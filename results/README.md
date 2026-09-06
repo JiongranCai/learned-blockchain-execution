@@ -11,12 +11,10 @@ organized by immutable run rather than by a mutable experiment family path.
 results/
   index.json
   archives/
-    SHA256SUMS
     <run-id>.tar.gz       # ignored by Git
   runs/
     <run-id>/             # ignored by Git
       manifest.json
-      MIGRATION-SHA256SUMS
       formal/
         REPORT.md
         analysis/
@@ -36,34 +34,20 @@ YYYY-MM-DD-<os>-<host>-<short-commit>[-<purpose>]
 If the same commit and host are run more than once on the same date, append a
 purpose or sequence suffix. Never reuse a completed run ID.
 
-## Rules
+## Keeping results
 
-1. Create the run directory before generating configs.
-2. Point every config output at
-   `results/runs/<run-id>/<run-class>/<family>/<matrix>/`.
-3. Keep pilot and formal records in separate run-class directories.
-4. Treat raw JSONL, validation bundles, configs, and binaries as immutable.
-   A report correction must preserve the previous report as a numbered version
-   and refresh the run manifest and checksum. A rerun gets a new run ID.
-5. Retain the exact configs, VCS-stamped binary, hashes, provenance, validation
-   bundles, raw JSONL, analysis program, and final report.
-6. Create `results/archives/<run-id>.tar.gz` with the run directory as its
-   single top-level entry.
-7. Record the archive path, byte size, and SHA-256 in `index.json`, and add its
-   checksum to `results/archives/SHA256SUMS`.
-8. Commit only the lightweight catalogue files. Both `runs/<run-id>/` and the
-   compressed archive are ignored by Git.
-9. Transfer the archive separately and keep at least one additional backup.
+Keep pilot and formal records in separate directories under each run. Retain
+configs, raw JSONL, the code revision, analysis script, and report so a result
+can be reproduced. Use a new run ID for a rerun.
 
-Large exploratory searches may use an auxiliary archive so formal evidence
-stays compact. Record every auxiliary archive, role, byte size, and SHA-256 in
-`index.json` and `archives/SHA256SUMS`; document any intentional exclusions in
-the run manifest or pilot inventory.
+Large run directories and optional archives stay outside Git. Update the
+lightweight `index.json` with the run location and a concise result summary.
+Historical checksum entries may remain as metadata; new runs and report edits
+do not require checksums, validation bundles, or numbered report copies.
 
 To restore a downloaded archive placed in `results/archives/`:
 
 ```sh
-sha256sum -c results/archives/SHA256SUMS
 mkdir -p results/runs
 tar -xzf results/archives/<run-id>.tar.gz -C results/runs
 ```

@@ -7,12 +7,9 @@ import argparse
 import copy
 import json
 import pathlib
-import re
-import subprocess
 
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-ZERO_HASH = "0" * 64
 COMPUTE_LEVELS = (1_000, 100_000)
 PROFILES = (
     {
@@ -206,8 +203,6 @@ def matrix(
     profile: dict,
     compute_units: int,
     seed: int,
-    expected_hash: str,
-    selected_cases: list[dict] | None = None,
 ) -> tuple[str, dict]:
     label = workload_label(profile, compute_units, seed)
     run_class = "smoke" if stage == "pilot" else "formal"
@@ -215,11 +210,10 @@ def matrix(
     profile_index = next(index for index, item in enumerate(PROFILES) if item["name"] == profile["name"])
     artifact_dir = f"results/runs/{run_id}/{stage}/artifacts/{profile['kind']}/{label}"
     return label, {
-        "schema_version": "experiment-matrix-v7",
+        "schema_version": "experiment-matrix-v8",
         "run_class": run_class,
         "workload": {
             "synthetic": synthetic_workload(profile, compute_units, seed),
-            "expected_hash": expected_hash,
         },
         "statistical_protocol": "configs/statistical/protocol-v1.json",
         "warmup_rounds": warmups,
@@ -233,9 +227,8 @@ def matrix(
             "page_cache": "unchanged_no_drop",
             "process_reuse": "fresh_process_per_run",
         },
-        "cases": copy.deepcopy(selected_cases if selected_cases is not None else cases(profile)),
+        "cases": cases(profile),
         "output": {
-            "validation_bundle": f"{artifact_dir}/validation-bundle.json",
             "validation_records": f"{artifact_dir}/validation.jsonl",
             "run_records": f"{artifact_dir}/runs.jsonl",
             "action_traces": f"{artifact_dir}/action-traces.jsonl",
@@ -246,46 +239,6 @@ def matrix(
 def write_json(path: pathlib.Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-
-
-def discover_hash(
-    run_id: str,
-    bench: pathlib.Path,
-    profile: dict,
-    compute_units: int,
-    seed: int,
-) -> str:
-    label, probe = matrix(
-        run_id,
-        "pilot",
-        profile,
-        compute_units,
-        seed,
-        ZERO_HASH,
-        [ALL_CASES["runtime"]],
-    )
-    probe_root = REPO / "results" / "runs" / run_id / "hash-probes"
-    artifact_dir = f"results/runs/{run_id}/hash-probes/artifacts/{profile['kind']}/{label}"
-    probe["output"] = {
-        "validation_bundle": f"{artifact_dir}/validation-bundle.json",
-        "validation_records": f"{artifact_dir}/validation.jsonl",
-        "run_records": f"{artifact_dir}/runs.jsonl",
-        "action_traces": f"{artifact_dir}/action-traces.jsonl",
-    }
-    probe_path = probe_root / "configs" / profile["kind"] / f"{label}.json"
-    write_json(probe_path, probe)
-    result = subprocess.run(
-        [str(bench), "validate", "-config", str(probe_path)],
-        cwd=REPO,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-    match = re.search(r"got ([0-9a-f]{64}), want " + ZERO_HASH, result.stdout)
-    if result.returncode == 0 or not match:
-        raise RuntimeError(f"could not discover workload hash for {label}: {result.stdout}")
-    return match.group(1)
 
 
 def preflight_config(run_id: str) -> dict:
@@ -301,7 +254,6 @@ def preflight_config(run_id: str) -> dict:
     }
     artifact_dir = f"results/runs/{run_id}/preflight/artifacts/kernel-policy"
     value["output"] = {
-        "validation_bundle": f"{artifact_dir}/validation-bundle.json",
         "validation_records": f"{artifact_dir}/validation.jsonl",
         "run_records": f"{artifact_dir}/runs.jsonl",
         "action_traces": f"{artifact_dir}/action-traces.jsonl",
@@ -332,26 +284,19 @@ the CQ3 formal analysis. Pilot matrices use 1+3 rounds; formal matrices use
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--bench", type=pathlib.Path, required=True)
     args = parser.parse_args()
-    bench = args.bench.resolve()
-    if not bench.is_file():
-        raise SystemExit(f"bench binary not found: {bench}")
-
     run_dir = REPO / "results" / "runs" / args.run_id
-    hashes = {}
     matrix_specs = []
     for profile in PROFILES:
         for compute_units in COMPUTE_LEVELS:
             for seed in profile["seeds"]:
                 label = workload_label(profile, compute_units, seed)
-                hashes[label] = discover_hash(args.run_id, bench, profile, compute_units, seed)
                 matrix_specs.append((profile, compute_units, seed, label))
 
     write_json(run_dir / "configs" / "preflight" / "kernel-policy.json", preflight_config(args.run_id))
     for stage in ("pilot", "formal"):
         for profile, compute_units, seed, label in matrix_specs:
-            _, value = matrix(args.run_id, stage, profile, compute_units, seed, hashes[label])
+            _, value = matrix(args.run_id, stage, profile, compute_units, seed)
             write_json(run_dir / "configs" / stage / profile["kind"] / f"{label}.json", value)
 
     formal_records = sum(len(cases(profile)) * 33 for profile, _, _, _ in matrix_specs)
@@ -375,7 +320,6 @@ def main() -> None:
             "wait_consumer_dispatch": "ready_queue",
         },
         "cases_by_workload_kind": {key: list(value) for key, value in CASE_IDS.items()},
-        "workload_hashes": hashes,
         "pilot_rounds": {"warmup": 1, "measurement": 3},
         "formal_rounds": {"warmup": 3, "measurement": 30},
         "expected_formal_records": formal_records,

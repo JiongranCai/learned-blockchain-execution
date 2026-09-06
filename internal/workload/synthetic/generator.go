@@ -234,7 +234,7 @@ func Generate(config Config) (workload.Artifact, error) {
 		artifact.OrderedBlocks = append(artifact.OrderedBlocks, block)
 	}
 
-	if err := artifact.Seal(); err != nil {
+	if err := artifact.Validate(); err != nil {
 		return workload.Artifact{}, err
 	}
 	return artifact, nil

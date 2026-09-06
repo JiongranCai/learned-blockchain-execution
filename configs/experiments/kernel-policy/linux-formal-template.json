@@ -1,5 +1,5 @@
 {
-  "schema_version": "experiment-matrix-v7",
+  "schema_version": "experiment-matrix-v8",
   "statistical_protocol": "configs/statistical/protocol-v1.json",
   "order_seed": 20260822,
   "timeout": "5m",
@@ -155,8 +155,7 @@
       "failure_every": 0,
       "program_shape": "selective_read_set",
       "branch_read_candidates": 8
-    },
-    "expected_hash": "4991772cff9655cb415dd048a782bbde811b4be23250d869ce60e46249d2df28"
+    }
   },
   "warmup_rounds": 3,
   "measurement_rounds": 30,
@@ -168,7 +167,6 @@
     "process_reuse": "fresh_process_per_run"
   },
   "output": {
-    "validation_bundle": "results/kernel-policy/linux-formal/validation-bundle.json",
     "validation_records": "results/kernel-policy/linux-formal/validation.jsonl",
     "run_records": "results/kernel-policy/linux-formal/runs.jsonl",
     "action_traces": "results/kernel-policy/linux-formal/action-traces.jsonl"

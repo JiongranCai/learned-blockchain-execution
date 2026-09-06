@@ -35,12 +35,12 @@ func run(arguments []string) error {
 		if err != nil {
 			return err
 		}
-		bundle, err := experiment.Validate(context.Background(), loaded)
+		result, err := experiment.Validate(context.Background(), loaded)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("validated %d cases; workload=%s result=%s bundle=%s\n",
-			len(bundle.ValidatedCases), bundle.WorkloadHash, bundle.ResultDigest, loaded.Config.Output.ValidationBundle)
+		fmt.Printf("validated %d cases; result=%s records=%s\n",
+			result.Cases, result.ResultDigest, loaded.Config.Output.ValidationRecords)
 		return nil
 
 	case "run":

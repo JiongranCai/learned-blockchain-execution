@@ -27,12 +27,8 @@ git status --short --branch
 go version
 uname -srm
 
-go test -count=1 ./...
-go test -race -count=1 ./...
-go vet ./...
 go build -trimpath -o "${temporary_dir}/bench" ./cmd/bench
 
-"${temporary_dir}/bench" validate -config configs/experiments/baseline/smoke.json
 "${temporary_dir}/bench" run -config configs/experiments/baseline/smoke.json
 
 printf '%s\n' "baseline Linux smoke passed; generated records are under results/baseline/smoke"

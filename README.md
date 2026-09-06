@@ -9,7 +9,7 @@ The current implementation focuses on a reproducible motivation and systems-eval
 - A frozen [`crypto-org-chain/go-block-stm`](https://github.com/crypto-org-chain/go-block-stm) execution kernel at commit `7afe924fb4a611a2626f92338f1f76e4ebefa62f`.
 - A deterministic flat transaction runtime, in-memory state implementation, and preset-order serial oracle.
 - A common engine and policy interface shared by serial execution and Block-STM.
-- Seeded synthetic workloads with hash-sealed artifacts, configurable uniform or hotspot/cold-tail key-access distributions, stable operation identifiers, state-dependent branches, and an explicit boundary between engine-visible inputs and audit-only ground truth.
+- Seeded synthetic workloads with configurable uniform or hotspot/cold-tail key-access distributions, stable operation identifiers, state-dependent branches, and an explicit boundary between engine-visible inputs and audit-only ground truth.
 - A configurable speculation window through `max_speculative_inflight`.
 - Dependency controls that expose CQ3-I acquisition, CQ3-R representation, and CQ3-U consumers as separate stages:
   - `runtime_observed` uses the mandatory MVCC runtime path;
@@ -26,7 +26,7 @@ The current implementation focuses on a reproducible motivation and systems-eval
 - Differential validation against the serial oracle before a candidate can be benchmarked.
 - Schema-versioned experiment matrices, isolated worker processes, provenance records, action traces, and mechanism-specific telemetry.
 
-An omitted kernel policy resolves to the behaviour a dependency DAG actually describes: do not dispatch a transaction that is not ready, and free the worker of a transaction that cannot proceed. Where that behaviour is unavailable the omitted field falls back to the frozen upstream value, so a finite `max_speculative_inflight` still routes through the untouched upstream entry point. An explicit field is never downgraded; an illegal explicit combination is refused. The resolved plan is written into every case identity, validation bundle and run record.
+An omitted kernel policy resolves to the behaviour a dependency DAG actually describes: do not dispatch a transaction that is not ready, and free the worker of a transaction that cannot proceed. Where that behaviour is unavailable the omitted field falls back to the frozen upstream value, so a finite `max_speculative_inflight` still routes through the untouched upstream entry point. An explicit field is never downgraded; an illegal explicit combination is refused. The resolved plan is written into each case and run record.
 
 The policies change only when work happens, never what a block commits: preset transaction order, canonical read versions, mandatory MVCC validation, deterministic reexecution, and atomic publication are identical under every setting, and the differential suite requires complete canonical equality with the serial oracle for all of them.
 
@@ -53,26 +53,24 @@ Root-level Go files come from the frozen Block-STM substrate, except for explici
 
 ## Build and verify
 
-The module declares Go 1.21 or later. Run the standard correctness gates from the repository root:
+The module declares Go 1.21 or later. Run the test, race, vet, and upstream-source checks from the repository root:
 
 ```sh
-go test -count=1 ./...
-go test -race -count=1 ./...
-go vet ./...
 ./scripts/verify_upstream_baseline.sh
 ```
 
-The baseline verifier checks the frozen upstream source, runs the full test and race suites, repeats determinism-sensitive execution, and executes a small Block-STM benchmark.
+The verifier runs each suite once. Experiment scripts build the runner and execute their matrices without repeating these suites.
 
 ## Run experiments
 
-Build the benchmark runner and validate a smoke matrix before executing it:
+Develop and run tests locally; run experiments on the Linux server over SSH. On the server:
 
 ```sh
 go build -trimpath -o /tmp/blockchain-execution-bench ./cmd/bench
-/tmp/blockchain-execution-bench validate -config configs/experiments/baseline/smoke.json
 /tmp/blockchain-execution-bench run -config configs/experiments/baseline/smoke.json
 ```
+
+`bench run` first compares each case with the serial oracle, then measures each scheduled run in a fresh process and compares its result digest with the oracle. `bench validate` remains available for a standalone correctness check. Configs and benchmark/validation records use v8; workload descriptors use v2. New runs need no validation bundle or file hashes. Historical runs can be reproduced with their recorded Git revision.
 
 Convenience scripts cover the implemented comparison families:
 
@@ -95,6 +93,8 @@ Kernel-policy matrices live under `configs/experiments/kernel-policy/`. They hol
 CQ3-U consumer-only matrices live under `configs/experiments/dependency-consumer/`. They hold the source, representation, builder, `P=8`, and `L=W` fixed within each matched contrast. Three pairs isolate direct, frontier, and all-predecessor waits with write estimates disabled; one additional RAW pair isolates write-estimate injection with waiting disabled. Runtime MVCC validation and whole-transaction reexecution remain mandatory in every cell.
 
 Smoke runs are correctness checks and pilot evidence. Formal performance runs belong on a controlled Linux server with frozen CPU affinity, NUMA policy, page-cache policy, toolchain, and statistical protocol. The committed formal templates intentionally reject placeholder environment controls.
+
+Keep all source, tests, and scripts in Git. Report missing tools or environment problems before installing anything. Prefer direct implementations and remove unused machinery; do not add approval workflows or artifact checksums.
 
 Generated results, temporary files, local papers, research notes, and private development artifacts are excluded from Git. The public repository tracks the source, tests, scripts, and reproducible experiment contracts required to rebuild results.
 

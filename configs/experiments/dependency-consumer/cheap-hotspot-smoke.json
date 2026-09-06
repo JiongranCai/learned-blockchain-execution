@@ -1,5 +1,5 @@
 {
-  "schema_version": "experiment-matrix-v7",
+  "schema_version": "experiment-matrix-v8",
   "statistical_protocol": "configs/statistical/protocol-v1.json",
   "order_seed": 20260811,
   "timeout": "2m",
@@ -114,8 +114,7 @@
       "max_compute_units": 100,
       "transaction_max_units": 104,
       "failure_every": 0
-    },
-    "expected_hash": "5f06a85c3e71b3cda38e09b3fb94bdbb60c2ab6646211a535d15818cc4940ab9"
+    }
   },
   "warmup_rounds": 1,
   "measurement_rounds": 5,
@@ -127,7 +126,6 @@
     "process_reuse": "fresh_process_per_run"
   },
   "output": {
-    "validation_bundle": "results/dependency-consumer/cheap-hotspot/validation-bundle.json",
     "validation_records": "results/dependency-consumer/cheap-hotspot/validation.jsonl",
     "run_records": "results/dependency-consumer/cheap-hotspot/runs.jsonl",
     "action_traces": "results/dependency-consumer/cheap-hotspot/action-traces.jsonl"

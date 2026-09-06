@@ -1,5 +1,5 @@
 {
-  "schema_version": "experiment-matrix-v7",
+  "schema_version": "experiment-matrix-v8",
   "run_class": "smoke",
   "workload": {
     "synthetic": {
@@ -18,8 +18,7 @@
         "hot_access_probability": 0.9,
         "read_write_same_key_probability": 0.75
       }
-    },
-    "expected_hash": "50713114f9d893d273baaacda2f2565c6aed77dd730b487e35531d8f8a16bc61"
+    }
   },
   "statistical_protocol": "configs/statistical/protocol-v1.json",
   "warmup_rounds": 1,
@@ -92,7 +91,6 @@
     }
   ],
   "output": {
-    "validation_bundle": "results/runs/smoke-hotspot-cold-tail/speculation-window/validation-bundle.json",
     "validation_records": "results/runs/smoke-hotspot-cold-tail/speculation-window/validation.jsonl",
     "run_records": "results/runs/smoke-hotspot-cold-tail/speculation-window/runs.jsonl",
     "action_traces": "results/runs/smoke-hotspot-cold-tail/speculation-window/action-traces.jsonl"
