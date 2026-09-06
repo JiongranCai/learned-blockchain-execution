@@ -65,19 +65,23 @@ func TestHotspotColdTailMatrixKeepsLargeKeySpaceAndExplicitDistribution(t *testi
 		t.Fatal(err)
 	}
 	config := loaded.Config.Workload.Synthetic
-	if config == nil || config.KeySpace != 8192 || config.AccessDistribution == nil {
+	if config == nil || config.KeySpace != 8192 || len(config.Mix) != 2 {
 		t.Fatalf("hotspot workload is incomplete: %#v", config)
 	}
-	distribution := config.AccessDistribution
-	if distribution.Kind != "hotspot" || distribution.HotKeyCount != 8 || distribution.HotAccessProbability != 0.9 ||
-		distribution.ReadWriteSameKeyProbability != 0.75 {
-		t.Fatalf("unexpected hotspot distribution: %#v", distribution)
+	rmw, independent := config.Mix[0], config.Mix[1]
+	if rmw.Template != "rmw" || rmw.Weight != 0.75 || independent.Template != "read_write" || independent.Weight != 0.25 {
+		t.Fatalf("unexpected read/write mixture: %#v", config.Mix)
+	}
+	for _, tx := range config.Mix {
+		if tx.Access.Kind != "hotspot" || tx.Access.HotKeys != 8 || tx.Access.HotProbability != 0.9 {
+			t.Fatalf("unexpected hotspot distribution: %#v", tx.Access)
+		}
 	}
 	artifact, err := experiment.LoadWorkload(loaded.Config.Workload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if artifact.Generator.Version != "synthetic-v2" {
+	if artifact.Generator.Version != "synthetic-v4" {
 		t.Fatalf("got generator version %q", artifact.Generator.Version)
 	}
 }

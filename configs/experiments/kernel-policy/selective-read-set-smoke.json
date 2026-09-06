@@ -149,12 +149,19 @@
       "key_space": 16,
       "block_count": 1,
       "transactions_per_block": 256,
-      "max_compute_units": 2000,
-      "min_compute_units": 2000,
-      "transaction_max_units": 2020,
       "failure_every": 0,
-      "program_shape": "selective_read_set",
-      "branch_read_candidates": 8
+      "mix": [
+        {
+          "weight": 1,
+          "template": "selective_read_set",
+          "candidate_keys": 8,
+          "compute": {
+            "min_units": 2000,
+            "max_units": 2000,
+            "prefix_fraction": 0
+          }
+        }
+      ]
     }
   },
   "warmup_rounds": 1,

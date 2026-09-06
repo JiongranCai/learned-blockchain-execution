@@ -111,9 +111,20 @@
       "key_space": 1,
       "block_count": 1,
       "transactions_per_block": 512,
-      "max_compute_units": 100,
-      "transaction_max_units": 104,
-      "failure_every": 0
+      "failure_every": 0,
+      "mix": [
+        {
+          "weight": 1,
+          "template": "read_write",
+          "read_keys": 1,
+          "update_keys": 1,
+          "compute": {
+            "min_units": 0,
+            "max_units": 100,
+            "prefix_fraction": 0
+          }
+        }
+      ]
     }
   },
   "warmup_rounds": 1,

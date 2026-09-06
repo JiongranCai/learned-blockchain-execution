@@ -8,10 +8,18 @@
       "key_space": 32,
       "block_count": 1,
       "transactions_per_block": 512,
-      "max_compute_units": 2000,
-      "transaction_max_units": 2007,
       "failure_every": 0,
-      "program_shape": "state_dependent_branch"
+      "mix": [
+        {
+          "weight": 1,
+          "template": "state_dependent_branch",
+          "compute": {
+            "min_units": 0,
+            "max_units": 2000,
+            "prefix_fraction": 0
+          }
+        }
+      ]
     }
   },
   "statistical_protocol": "configs/statistical/protocol-v1.json",

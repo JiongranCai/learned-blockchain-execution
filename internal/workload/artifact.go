@@ -12,7 +12,7 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/state/memkv"
 )
 
-const ArtifactSchemaVersion = "workload-artifact-v2"
+const ArtifactSchemaVersion = "workload-artifact-v3"
 
 var (
 	ErrInvalidArtifact = errors.New("invalid workload artifact")
@@ -32,37 +32,6 @@ type LogicalArrival struct {
 	LogicalTime   uint64 `json:"logical_time"`
 	BlockID       string `json:"block_id"`
 	TransactionID string `json:"transaction_id"`
-}
-
-type AccessMode string
-
-const (
-	AccessRead   AccessMode = "read"
-	AccessWrite  AccessMode = "write"
-	AccessDelete AccessMode = "delete"
-)
-
-type GroundTruthAccess struct {
-	OperationID string     `json:"operation_id"`
-	Mode        AccessMode `json:"mode"`
-	Key         []byte     `json:"key"`
-}
-
-type BranchOutcome struct {
-	BranchID string `json:"branch_id"`
-	Taken    bool   `json:"taken"`
-	Target   int    `json:"target"`
-}
-
-// TransactionGroundTruth is audit-only information. It is deliberately absent
-// from ExecutionInput so a candidate engine cannot receive generator knowledge
-// merely because it consumes the artifact.
-type TransactionGroundTruth struct {
-	TransactionID  string              `json:"transaction_id"`
-	ExpectedStatus model.TxStatus      `json:"expected_status"`
-	OperationPath  []string            `json:"operation_path"`
-	Accesses       []GroundTruthAccess `json:"accesses"`
-	Branches       []BranchOutcome     `json:"branches"`
 }
 
 type MetadataSource string
@@ -115,19 +84,17 @@ func NewMetadataRecord(
 	}
 }
 
-// Artifact contains the input and ground truth for one generated workload.
+// Artifact contains one generated workload and its optional input metadata.
 type Artifact struct {
-	SchemaVersion          string                   `json:"schema_version"`
-	Generator              GeneratorDescriptor      `json:"generator"`
-	InitialState           []model.StateEntry       `json:"initial_state"`
-	OrderedBlocks          []model.Block            `json:"ordered_blocks"`
-	LogicalArrivalSchedule []LogicalArrival         `json:"logical_arrival_schedule"`
-	GroundTruth            []TransactionGroundTruth `json:"ground_truth"`
-	EngineVisibleMetadata  []MetadataRecord         `json:"engine_visible_metadata"`
+	SchemaVersion          string              `json:"schema_version"`
+	Generator              GeneratorDescriptor `json:"generator"`
+	InitialState           []model.StateEntry  `json:"initial_state"`
+	OrderedBlocks          []model.Block       `json:"ordered_blocks"`
+	LogicalArrivalSchedule []LogicalArrival    `json:"logical_arrival_schedule"`
+	EngineVisibleMetadata  []MetadataRecord    `json:"engine_visible_metadata"`
 }
 
-// ExecutionInput contains only data available to an execution run. In
-// particular, generator ground truth is not representable in this type.
+// ExecutionInput contains the workload and explicitly selected input metadata.
 type ExecutionInput struct {
 	InitialState           []model.StateEntry `json:"initial_state"`
 	OrderedBlocks          []model.Block      `json:"ordered_blocks"`
@@ -223,8 +190,6 @@ func (a Artifact) Validate() error {
 
 	logicalIDs := make(map[string]struct{})
 	txIDs := make(map[string]string)
-	txOrder := make([]string, 0)
-	txOperations := make(map[string]map[string]model.Instruction)
 	for _, block := range a.OrderedBlocks {
 		if block.ID == "" {
 			return invalidArtifact("block id is required")
@@ -242,8 +207,6 @@ func (a Artifact) Validate() error {
 				return invalidArtifact("duplicate logical id %q", transaction.ID)
 			}
 			logicalIDs[transaction.ID] = struct{}{}
-			txOrder = append(txOrder, transaction.ID)
-			operations := make(map[string]model.Instruction, len(transaction.Program.Instructions))
 			for _, instruction := range transaction.Program.Instructions {
 				if instruction.ID == "" {
 					return invalidArtifact("transaction %q has an operation without id", transaction.ID)
@@ -252,13 +215,11 @@ func (a Artifact) Validate() error {
 					return invalidArtifact("duplicate logical id %q", instruction.ID)
 				}
 				logicalIDs[instruction.ID] = struct{}{}
-				operations[instruction.ID] = instruction
 			}
-			txOperations[transaction.ID] = operations
 		}
 	}
 
-	if len(a.LogicalArrivalSchedule) != len(txOrder) {
+	if len(a.LogicalArrivalSchedule) != len(txIDs) {
 		return invalidArtifact("logical arrival count does not match transaction count")
 	}
 	arrivals := make(map[string]struct{}, len(a.LogicalArrivalSchedule))
@@ -277,35 +238,6 @@ func (a Artifact) Validate() error {
 			return invalidArtifact("duplicate logical arrival for %q", arrival.TransactionID)
 		}
 		arrivals[arrival.TransactionID] = struct{}{}
-	}
-
-	if len(a.GroundTruth) != len(txOrder) {
-		return invalidArtifact("ground truth count does not match transaction count")
-	}
-	for index, truth := range a.GroundTruth {
-		if truth.TransactionID != txOrder[index] {
-			return invalidArtifact("ground truth must follow ordered transaction order")
-		}
-		if !validTxStatus(truth.ExpectedStatus) {
-			return invalidArtifact("ground truth for %q has invalid expected status", truth.TransactionID)
-		}
-		operations := txOperations[truth.TransactionID]
-		for _, operationID := range truth.OperationPath {
-			if _, exists := operations[operationID]; !exists {
-				return invalidArtifact("ground truth path references unknown operation %q", operationID)
-			}
-		}
-		for _, access := range truth.Accesses {
-			instruction, exists := operations[access.OperationID]
-			if !exists || !accessMatchesOpcode(access.Mode, instruction.Op) || !bytes.Equal(access.Key, instruction.Key) {
-				return invalidArtifact("ground truth access does not match operation %q", access.OperationID)
-			}
-		}
-		for _, branch := range truth.Branches {
-			if operations[branch.BranchID].Op != model.OpJumpIf {
-				return invalidArtifact("ground truth branch references non-branch operation %q", branch.BranchID)
-			}
-		}
 	}
 
 	metadataIDs := make(map[string]struct{}, len(a.EngineVisibleMetadata))
@@ -337,34 +269,6 @@ func validMetadataSource(source MetadataSource) bool {
 	switch source {
 	case MetadataDeclared, MetadataObservedHistory, MetadataPredicted, MetadataOracleTestOnly:
 		return true
-	default:
-		return false
-	}
-}
-
-func validTxStatus(status model.TxStatus) bool {
-	switch status {
-	case model.TxStatusSuccess,
-		model.TxStatusFailed,
-		model.TxStatusOutOfGas,
-		model.TxStatusInvalidProgram,
-		model.TxStatusInvalidState,
-		model.TxStatusArithmeticError,
-		model.TxStatusCancelled:
-		return true
-	default:
-		return false
-	}
-}
-
-func accessMatchesOpcode(mode AccessMode, opcode model.Opcode) bool {
-	switch mode {
-	case AccessRead:
-		return opcode == model.OpRead
-	case AccessWrite:
-		return opcode == model.OpWrite
-	case AccessDelete:
-		return opcode == model.OpDelete
 	default:
 		return false
 	}

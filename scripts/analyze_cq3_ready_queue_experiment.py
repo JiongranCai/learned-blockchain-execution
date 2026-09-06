@@ -118,7 +118,7 @@ def load_stage(run_root, stage):
             "label": label,
             "kind": kind,
             "profile": label.split("-c", 1)[0],
-            "compute_units": synthetic["max_compute_units"],
+            "compute_units": synthetic["mix"][0]["compute"]["max_units"] if "mix" in synthetic else synthetic["max_compute_units"],
             "seed": synthetic["seed"],
             "config": config,
         }

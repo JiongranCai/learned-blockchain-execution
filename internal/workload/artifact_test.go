@@ -11,7 +11,7 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/workload/synthetic"
 )
 
-func TestExecutionInputRequiresExplicitMetadataSourcesAndOmitsGroundTruth(t *testing.T) {
+func TestExecutionInputFiltersAndClonesMetadata(t *testing.T) {
 	artifact := generatedArtifact(t)
 	artifact.EngineVisibleMetadata = []workload.MetadataRecord{
 		workload.NewMetadataRecord(
@@ -62,7 +62,7 @@ func TestExecutionInputRequiresExplicitMetadataSourcesAndOmitsGroundTruth(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(encoded), "ground_truth") || strings.Contains(string(encoded), "oracle payload") {
+	if strings.Contains(string(encoded), "oracle payload") {
 		t.Fatalf("execution input leaked audit-only information: %s", encoded)
 	}
 	declared.Metadata[0].Payload[0] = 'X'
@@ -119,12 +119,6 @@ func TestArtifactRejectsInconsistentLogicalMetadata(t *testing.T) {
 			},
 		},
 		{
-			name: "ground truth key disagrees with instruction",
-			mutate: func(artifact *workload.Artifact) {
-				artifact.GroundTruth[0].Accesses[0].Key = []byte("wrong")
-			},
-		},
-		{
 			name: "arrival references wrong block",
 			mutate: func(artifact *workload.Artifact) {
 				artifact.LogicalArrivalSchedule[0].BlockID = "wrong"
@@ -170,9 +164,8 @@ func generatedArtifact(t *testing.T) workload.Artifact {
 		KeySpace:             2,
 		BlockCount:           1,
 		TransactionsPerBlock: 2,
-		MaxComputeUnits:      2,
-		TransactionMaxUnits:  6,
 		FailureEvery:         0,
+		Mix:                  []synthetic.TransactionConfig{{Weight: 1, Template: synthetic.TemplateReadWrite, ReadKeys: 1, UpdateKeys: 1, Compute: synthetic.ComputeConfig{MinUnits: 0, MaxUnits: 2}}},
 	})
 	if err != nil {
 		t.Fatal(err)

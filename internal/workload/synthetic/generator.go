@@ -2,10 +2,10 @@ package synthetic
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"math/rand"
+	"sort"
 
 	"github.com/crypto-org-chain/go-block-stm/internal/model"
 	"github.com/crypto-org-chain/go-block-stm/internal/runtime/flat"
@@ -13,795 +13,379 @@ import (
 )
 
 const (
-	GeneratorName      = "synthetic"
-	GeneratorVersion   = "synthetic-v1"
-	GeneratorVersionV2 = "synthetic-v2"
-	GeneratorVersionV3 = "synthetic-v3"
+	GeneratorName    = "synthetic"
+	GeneratorVersion = "synthetic-v4"
 
-	AccessDistributionUniform = "uniform"
-	AccessDistributionHotspot = "hotspot"
-)
-
-var (
-	ErrInvalidInitialKeys          = errors.New("initial_keys must be positive")
-	ErrInvalidKeySpace             = errors.New("key_space must be in [1, initial_keys]")
-	ErrInvalidBlockCount           = errors.New("block_count must be positive")
-	ErrInvalidTransactions         = errors.New("transactions_per_block must be positive")
-	ErrInvalidTransactionBudget    = errors.New("transaction_max_units is too small")
-	ErrInvalidComputeRange         = errors.New("min_compute_units must not exceed max_compute_units")
-	ErrInvalidFailureInterval      = errors.New("failure_every must be non-negative")
-	ErrInvalidProgramShape         = errors.New("unsupported synthetic program_shape")
-	ErrBranchKeySpace              = errors.New("branching program shapes require initial_keys greater than key_space")
-	ErrInvalidAccessDistribution   = errors.New("unsupported access_distribution kind")
-	ErrInvalidHotKeyCount          = errors.New("hot_key_count must be in [1, key_space-1]")
-	ErrInvalidHotProbability       = errors.New("hot_access_probability must be strictly between 0 and 1")
-	ErrInvalidReadWriteCorrelation = errors.New("read_write_same_key_probability must be in [0, 1]")
-	ErrInvalidSelectiveReadCount   = errors.New("selective_read_set requires branch_read_candidates in [2, key_space]")
-	ErrInvalidStageFanIn           = errors.New("staged_fan_in requires stage_fan_in in [2, transactions_per_block-1]")
-	ErrInvalidFanIn                = errors.New("fan_in_fan_out requires fan_in in [2, transactions_per_block-1]")
-	ErrStructuredKeySpace          = errors.New("staged_fan_in requires one key per generated transaction")
-	ErrStructuredDistribution      = errors.New("structured program shapes do not accept access_distribution")
-	ErrUnexpectedShapeParameter    = errors.New("program shape parameter is set for an incompatible shape")
-)
-
-const (
-	ProgramShapeStateDependentBranch = "state_dependent_branch"
-	ProgramShapeSelectiveReadSet     = "selective_read_set"
-	ProgramShapeStagedFanIn          = "staged_fan_in"
-	ProgramShapeFanInFanOut          = "fan_in_fan_out"
+	TemplateRMW         = "rmw"
+	TemplateReadWrite   = "read_write"
+	TemplateBranch      = "state_dependent_branch"
+	TemplateSelective   = "selective_read_set"
+	TemplateStagedFanIn = "staged_fan_in"
+	TemplateFanInFanOut = "fan_in_fan_out"
 )
 
 type Config struct {
-	Seed                 int64                     `json:"seed"`
-	InitialKeys          int                       `json:"initial_keys"`
-	KeySpace             int                       `json:"key_space"`
-	BlockCount           int                       `json:"block_count"`
-	TransactionsPerBlock int                       `json:"transactions_per_block"`
-	MaxComputeUnits      uint64                    `json:"max_compute_units"`
-	MinComputeUnits      uint64                    `json:"min_compute_units,omitempty"`
-	TransactionMaxUnits  uint64                    `json:"transaction_max_units"`
-	FailureEvery         int                       `json:"failure_every"`
-	ProgramShape         string                    `json:"program_shape,omitempty"`
-	BranchReadCandidates int                       `json:"branch_read_candidates,omitempty"`
-	StageFanIn           int                       `json:"stage_fan_in,omitempty"`
-	FanIn                int                       `json:"fan_in,omitempty"`
-	AccessDistribution   *AccessDistributionConfig `json:"access_distribution,omitempty"`
+	Seed                 int64               `json:"seed"`
+	InitialKeys          int                 `json:"initial_keys"`
+	KeySpace             int                 `json:"key_space"`
+	BlockCount           int                 `json:"block_count"`
+	TransactionsPerBlock int                 `json:"transactions_per_block"`
+	FailureEvery         int                 `json:"failure_every,omitempty"`
+	Mix                  []TransactionConfig `json:"mix"`
 }
 
-type AccessDistributionConfig struct {
-	Kind                        string  `json:"kind"`
-	HotKeyCount                 int     `json:"hot_key_count,omitempty"`
-	HotAccessProbability        float64 `json:"hot_access_probability,omitempty"`
-	ReadWriteSameKeyProbability float64 `json:"read_write_same_key_probability,omitempty"`
+// TransactionConfig separates transaction semantics, key sampling and CPU cost.
+// Weights are sampling weights, not exact per-block transaction counts.
+// RMW reads distinct keys and updates the first UpdateKeys of those reads.
+// ReadWrite samples its write set independently and uses the corresponding
+// read register (cycling when there are more writes than reads).
+// The remaining templates are dependency-structure diagnostics.
+type TransactionConfig struct {
+	Weight        float64       `json:"weight"`
+	Template      string        `json:"template"`
+	ReadKeys      int           `json:"read_keys,omitempty"`
+	UpdateKeys    int           `json:"update_keys,omitempty"`
+	CandidateKeys int           `json:"candidate_keys,omitempty"`
+	FanIn         int           `json:"fan_in,omitempty"`
+	Access        AccessConfig  `json:"access,omitempty"`
+	Compute       ComputeConfig `json:"compute"`
+}
+
+type AccessConfig struct {
+	Kind           string  `json:"kind,omitempty"`
+	HotKeys        int     `json:"hot_keys,omitempty"`
+	HotProbability float64 `json:"hot_probability,omitempty"`
+	// Finite Zipf: P(rank) is proportional to rank^(-theta), ranks 1..KeySpace.
+	// This includes the [0,1] exponents used by transactional YCSB.
+	Theta float64 `json:"theta,omitempty"`
+}
+
+type ComputeConfig struct {
+	MinUnits       uint64  `json:"min_units"`
+	MaxUnits       uint64  `json:"max_units"`
+	PrefixFraction float64 `json:"prefix_fraction"`
 }
 
 func Generate(config Config) (workload.Artifact, error) {
 	if err := validateConfig(config); err != nil {
 		return workload.Artifact{}, err
 	}
-	configDescriptor, err := json.Marshal(config)
+	descriptor, err := json.Marshal(config)
 	if err != nil {
 		return workload.Artifact{}, err
 	}
-
-	rng := rand.New(rand.NewSource(config.Seed))
 	artifact := workload.Artifact{
 		SchemaVersion: workload.ArtifactSchemaVersion,
-		Generator: workload.GeneratorDescriptor{
-			Name:    GeneratorName,
-			Version: generatorVersion(config),
-			Seed:    config.Seed,
-			Config:  configDescriptor,
-		},
-		InitialState:           make([]model.StateEntry, 0, config.InitialKeys),
-		OrderedBlocks:          make([]model.Block, 0, config.BlockCount),
-		LogicalArrivalSchedule: make([]workload.LogicalArrival, 0),
-		GroundTruth:            make([]workload.TransactionGroundTruth, 0),
-		EngineVisibleMetadata:  make([]workload.MetadataRecord, 0),
+		Generator:     workload.GeneratorDescriptor{Name: GeneratorName, Version: GeneratorVersion, Seed: config.Seed, Config: descriptor},
 	}
-
-	initialValues := make([]int64, config.InitialKeys)
-	for i := 0; i < config.InitialKeys; i++ {
-		initialValues[i] = int64(rng.Intn(10_000))
-		artifact.InitialState = append(artifact.InitialState, model.StateEntry{
-			Key:   stateKey(i),
-			Value: flat.EncodeInt64(initialValues[i]),
-		})
+	// Cost and mixture draws never consume the key/initial-state streams.
+	// Changing compute ranges or prefix placement preserves the access skeleton.
+	initialRNG := rand.New(rand.NewSource(config.Seed))
+	keyRNG := rand.New(rand.NewSource(config.Seed + 1))
+	costRNG := rand.New(rand.NewSource(config.Seed + 2))
+	mixRNG := rand.New(rand.NewSource(config.Seed + 3))
+	initial := make([]int64, config.InitialKeys)
+	for i := range initial {
+		initial[i] = int64(initialRNG.Intn(10_000))
+		artifact.InitialState = append(artifact.InitialState, model.StateEntry{Key: stateKey(i), Value: flat.EncodeInt64(initial[i])})
 	}
-
-	globalTransaction := 0
-	for blockIndex := 0; blockIndex < config.BlockCount; blockIndex++ {
-		block := model.Block{
-			ID:           fmt.Sprintf("block-%06d", blockIndex),
-			Height:       uint64(blockIndex),
-			Transactions: make([]model.Transaction, 0, config.TransactionsPerBlock),
-		}
-		for transactionIndex := 0; transactionIndex < config.TransactionsPerBlock; transactionIndex++ {
-			transactionID := fmt.Sprintf("tx-%06d-%06d", blockIndex, transactionIndex)
-			readKeyIndex := sampleKeyIndex(rng, config)
-			writeKeyIndex, readWriteCorrelated := sampleWriteKeyIndex(rng, config, readKeyIndex)
-			readKey := stateKey(readKeyIndex)
-			writeKey := stateKey(writeKeyIndex)
-			delta := int64(rng.Intn(11) - 5)
-			computeUnits := config.MinComputeUnits
-			if config.MaxComputeUnits > config.MinComputeUnits {
-				width := config.MaxComputeUnits - config.MinComputeUnits + 1
-				computeUnits += uint64(rng.Int63n(int64(width)))
-			}
-
-			willFail := config.FailureEvery > 0 && (globalTransaction+1)%config.FailureEvery == 0
-			instructions, branchTruth := flatProgram(readKey, writeKey, delta, computeUnits)
-			switch config.ProgramShape {
-			case ProgramShapeStateDependentBranch:
-				alternateReadKeyIndex := sampleKeyIndex(rng, config)
-				alternateReadKey := stateKey(alternateReadKeyIndex)
-				selectorIndex := config.KeySpace + rng.Intn(config.InitialKeys-config.KeySpace)
-				branchTaken := initialValues[selectorIndex] < 5_000
-				if readWriteCorrelated && branchTaken {
-					writeKey = stateKey(alternateReadKeyIndex)
+	samplers := make([]keySampler, len(config.Mix))
+	var weight float64
+	for i, tx := range config.Mix {
+		samplers[i] = newKeySampler(config.KeySpace, tx.Access)
+		weight += tx.Weight
+	}
+	global := 0
+	for b := 0; b < config.BlockCount; b++ {
+		block := model.Block{ID: fmt.Sprintf("block-%06d", b), Height: uint64(b)}
+		for t := 0; t < config.TransactionsPerBlock; t++ {
+			choice := mixRNG.Float64() * weight
+			selected := len(config.Mix) - 1
+			for i, tx := range config.Mix {
+				choice -= tx.Weight
+				if choice < 0 {
+					selected = i
+					break
 				}
-				instructions, branchTruth = stateDependentBranchProgram(
-					stateKey(selectorIndex),
-					branchTaken,
-					readKey,
-					alternateReadKey,
-					writeKey,
-					delta,
-					computeUnits,
-				)
-			case ProgramShapeSelectiveReadSet:
-				selectorIndex := config.KeySpace + globalTransaction%(config.InitialKeys-config.KeySpace)
-				candidateReadKeys := make([][]byte, config.BranchReadCandidates)
-				for candidateIndex := range candidateReadKeys {
-					candidateReadKeys[candidateIndex] = stateKey(candidateIndex)
+			}
+			tx := config.Mix[selected]
+			units := tx.Compute.MinUnits + uint64(costRNG.Int63n(int64(tx.Compute.MaxUnits-tx.Compute.MinUnits+1)))
+			prefix := uint64(float64(units) * tx.Compute.PrefixFraction)
+			suffix := units - prefix
+			delta := int64(keyRNG.Intn(11) - 5)
+			sample := &samplers[selected]
+			var instructions []model.Instruction
+			switch tx.Template {
+			case TemplateRMW, TemplateReadWrite:
+				reads := sample.keys(keyRNG, tx.ReadKeys)
+				var writes []int
+				if tx.Template == TemplateRMW {
+					writes = reads[:tx.UpdateKeys]
+				} else {
+					writes = sample.keys(keyRNG, tx.UpdateKeys)
 				}
-				selectedCandidate := int(initialValues[selectorIndex]) * config.BranchReadCandidates / 10_000
-				writeKey = candidateReadKeys[selectedCandidate]
-				instructions, branchTruth = selectiveReadSetProgram(
-					stateKey(selectorIndex),
-					initialValues[selectorIndex],
-					candidateReadKeys,
-					writeKey,
-					delta,
-					computeUnits,
-				)
-			case ProgramShapeStagedFanIn:
-				instructions, branchTruth = stagedFanInProgram(
-					transactionIndex,
-					globalTransaction,
-					config.StageFanIn,
-					delta,
-					computeUnits,
-				)
-			case ProgramShapeFanInFanOut:
-				instructions, branchTruth = fanInFanOutProgram(
-					transactionIndex,
-					globalTransaction,
-					config.FanIn,
-					delta,
-					computeUnits,
-				)
+				instructions = linearProgram(reads, writes, delta, prefix, suffix)
+			case TemplateBranch, TemplateSelective:
+				selector := config.KeySpace + keyRNG.Intn(config.InitialKeys-config.KeySpace)
+				var candidates []int
+				var write int
+				if tx.Template == TemplateBranch {
+					candidates = []int{sample.key(keyRNG), sample.key(keyRNG)}
+					write = sample.key(keyRNG)
+				} else {
+					for k := 0; k < tx.CandidateKeys; k++ {
+						candidates = append(candidates, k)
+					}
+					write = candidates[int(initial[selector])*len(candidates)/10_000]
+				}
+				instructions = branchProgram(selector, candidates, write, delta, prefix, suffix)
+			case TemplateStagedFanIn, TemplateFanInFanOut:
+				reads := []int{global}
+				if tx.Template == TemplateFanInFanOut && t >= tx.FanIn {
+					reads = nil
+					for k := global - t; k < global-t+tx.FanIn; k++ {
+						reads = append(reads, k)
+					}
+				} else if tx.Template == TemplateStagedFanIn {
+					role := t % (tx.FanIn + 1)
+					if role == tx.FanIn {
+						reads = nil
+						for k := global - tx.FanIn; k < global; k++ {
+							reads = append(reads, k)
+						}
+					} else if t > tx.FanIn {
+						reads[0] = global - role - 1
+					}
+				}
+				instructions = linearProgram(reads, []int{global}, delta, prefix, suffix)
 			}
-			if willFail {
-				instructions = append(instructions, model.Instruction{
-					Op:        model.OpFailIf,
-					Condition: model.Condition{Kind: model.ConditionAlways},
-					ErrorCode: "synthetic_failure",
-				})
+			if config.FailureEvery > 0 && (global+1)%config.FailureEvery == 0 {
+				instructions = append(instructions, model.Instruction{Op: model.OpFailIf, Condition: model.Condition{Kind: model.ConditionAlways}, ErrorCode: "synthetic_failure"})
 			}
-			instructions = append(instructions, model.Instruction{
-				Op: model.OpReturn,
-				Expression: model.Expression{
-					Base: model.Register("value"),
-				},
-			})
-			for instructionIndex := range instructions {
-				instructions[instructionIndex].ID = operationID(blockIndex, transactionIndex, instructionIndex)
+			instructions = append(instructions, model.Instruction{Op: model.OpReturn, Expression: model.Expression{Base: model.Register("r0")}})
+			// A conservative program budget also covers branch arms that are not
+			// taken. Gas exhaustion is tested with explicit runtime programs.
+			var budget uint64
+			for i := range instructions {
+				instructions[i].ID = fmt.Sprintf("op-%06d-%06d-%03d", b, t, i)
+				budget += 1 + instructions[i].ComputeUnits
 			}
-
-			block.Transactions = append(block.Transactions, model.Transaction{
-				ID:       transactionID,
-				MaxUnits: config.TransactionMaxUnits,
-				Program:  model.Program{Instructions: instructions},
-			})
-
-			expectedStatus := model.TxStatusSuccess
-			if willFail {
-				expectedStatus = model.TxStatusFailed
-			}
-			actualIndices := branchTruth.actualInstructionIndices(willFail, len(instructions))
-			operationPath := make([]string, 0, len(actualIndices))
-			for _, instructionIndex := range actualIndices {
-				operationPath = append(operationPath, instructions[instructionIndex].ID)
-			}
-			accesses := branchTruth.accesses(instructions)
-			branches := branchTruth.branches(instructions)
-			artifact.GroundTruth = append(artifact.GroundTruth, workload.TransactionGroundTruth{
-				TransactionID:  transactionID,
-				ExpectedStatus: expectedStatus,
-				OperationPath:  operationPath,
-				Accesses:       accesses,
-				Branches:       branches,
-			})
-			artifact.LogicalArrivalSchedule = append(artifact.LogicalArrivalSchedule, workload.LogicalArrival{
-				Sequence:      uint64(globalTransaction),
-				LogicalTime:   uint64(globalTransaction),
-				BlockID:       block.ID,
-				TransactionID: transactionID,
-			})
-			globalTransaction++
+			id := fmt.Sprintf("tx-%06d-%06d", b, t)
+			block.Transactions = append(block.Transactions, model.Transaction{ID: id, MaxUnits: budget, Program: model.Program{Instructions: instructions}})
+			artifact.LogicalArrivalSchedule = append(artifact.LogicalArrivalSchedule, workload.LogicalArrival{Sequence: uint64(global), LogicalTime: uint64(global), BlockID: block.ID, TransactionID: id})
+			global++
 		}
 		artifact.OrderedBlocks = append(artifact.OrderedBlocks, block)
 	}
-
-	if err := artifact.Validate(); err != nil {
-		return workload.Artifact{}, err
-	}
-	return artifact, nil
+	return artifact, artifact.Validate()
 }
 
-func validateConfig(config Config) error {
-	if config.InitialKeys <= 0 {
-		return ErrInvalidInitialKeys
+func validateConfig(c Config) error {
+	bad := func(message string) error { return fmt.Errorf("invalid synthetic workload: %s", message) }
+	if c.InitialKeys <= 0 || c.KeySpace <= 0 || c.KeySpace > c.InitialKeys {
+		return bad("require initial_keys >= key_space > 0")
 	}
-	if config.KeySpace <= 0 || config.KeySpace > config.InitialKeys {
-		return ErrInvalidKeySpace
+	if c.BlockCount <= 0 || c.TransactionsPerBlock <= 0 || c.FailureEvery < 0 {
+		return bad("positive block/transaction counts and nonnegative failure_every are required")
 	}
-	if config.BlockCount <= 0 {
-		return ErrInvalidBlockCount
+	if len(c.Mix) == 0 {
+		return bad("mix must contain a transaction template")
 	}
-	if config.TransactionsPerBlock <= 0 {
-		return ErrInvalidTransactions
-	}
-	if config.FailureEvery < 0 {
-		return ErrInvalidFailureInterval
-	}
-	if config.MinComputeUnits > config.MaxComputeUnits {
-		return ErrInvalidComputeRange
-	}
-	if config.ProgramShape != "" &&
-		config.ProgramShape != ProgramShapeStateDependentBranch &&
-		config.ProgramShape != ProgramShapeSelectiveReadSet &&
-		config.ProgramShape != ProgramShapeStagedFanIn &&
-		config.ProgramShape != ProgramShapeFanInFanOut {
-		return ErrInvalidProgramShape
-	}
-	if (config.ProgramShape == ProgramShapeStateDependentBranch || config.ProgramShape == ProgramShapeSelectiveReadSet) &&
-		config.InitialKeys <= config.KeySpace {
-		return ErrBranchKeySpace
-	}
-	if config.ProgramShape == ProgramShapeSelectiveReadSet {
-		if config.BranchReadCandidates < 2 || config.BranchReadCandidates > config.KeySpace {
-			return ErrInvalidSelectiveReadCount
+	var totalWeight float64
+	for _, tx := range c.Mix {
+		if tx.Weight <= 0 || math.IsNaN(tx.Weight) || math.IsInf(tx.Weight, 0) {
+			return bad("weights must be positive and finite")
 		}
-		if config.StageFanIn != 0 || config.FanIn != 0 {
-			return ErrUnexpectedShapeParameter
+		totalWeight += tx.Weight
+		// Float64 preserves unit counts through 2^53; bound here also keeps
+		// the prefix split and generated gas budget exact and well within uint64.
+		if tx.Compute.MinUnits > tx.Compute.MaxUnits || tx.Compute.MaxUnits > 1<<53 || !probability(tx.Compute.PrefixFraction) {
+			return bad("invalid compute range or prefix_fraction")
 		}
-	} else if config.BranchReadCandidates != 0 {
-		return ErrUnexpectedShapeParameter
-	}
-	if config.ProgramShape == ProgramShapeStagedFanIn {
-		if config.StageFanIn < 2 || config.StageFanIn >= config.TransactionsPerBlock {
-			return ErrInvalidStageFanIn
+		support := c.KeySpace
+		switch tx.Access.Kind {
+		case "", "uniform":
+			if tx.Access.HotKeys != 0 || tx.Access.HotProbability != 0 || tx.Access.Theta != 0 {
+				return bad("uniform access does not use hotspot or Zipf parameters")
+			}
+		case "hotspot":
+			if tx.Access.HotKeys <= 0 || tx.Access.HotKeys >= c.KeySpace || !probability(tx.Access.HotProbability) || tx.Access.Theta != 0 {
+				return bad("invalid hotspot parameters")
+			}
+			if tx.Access.HotProbability == 1 {
+				support = tx.Access.HotKeys
+			}
+			if tx.Access.HotProbability == 0 {
+				support = c.KeySpace - tx.Access.HotKeys
+			}
+		case "zipf":
+			if !probability(tx.Access.Theta) || tx.Access.HotKeys != 0 || tx.Access.HotProbability != 0 {
+				return bad("finite Zipf requires theta in [0,1]")
+			}
+		default:
+			return bad("unknown access distribution")
 		}
-		if config.BlockCount > config.KeySpace/config.TransactionsPerBlock {
-			return ErrStructuredKeySpace
+		if tx.ReadKeys < 0 || tx.UpdateKeys < 0 || tx.CandidateKeys < 0 || tx.FanIn < 0 {
+			return bad("negative key count")
 		}
-		if config.FanIn != 0 {
-			return ErrUnexpectedShapeParameter
+		switch tx.Template {
+		case TemplateRMW, TemplateReadWrite:
+			if tx.ReadKeys < 1 || tx.ReadKeys > support || tx.UpdateKeys > support {
+				return bad("read/write key counts exceed the sampling support")
+			}
+			if tx.Template == TemplateRMW && tx.UpdateKeys > tx.ReadKeys {
+				return bad("rmw updates must be a subset of reads")
+			}
+			if tx.CandidateKeys != 0 || tx.FanIn != 0 {
+				return bad("linear templates do not use candidate_keys or fan_in")
+			}
+		case TemplateBranch, TemplateSelective:
+			if c.InitialKeys == c.KeySpace {
+				return bad("selector templates require initial_keys > key_space")
+			}
+			if tx.ReadKeys != 0 || tx.UpdateKeys != 0 || tx.FanIn != 0 {
+				return bad("selector templates have one data read and one write")
+			}
+			if tx.Template == TemplateBranch && tx.CandidateKeys != 0 {
+				return bad("state_dependent_branch has two sampled candidates")
+			}
+			if tx.Template == TemplateSelective && (tx.CandidateKeys < 2 || tx.CandidateKeys > c.KeySpace || tx.Access != (AccessConfig{})) {
+				return bad("selective_read_set requires 2..key_space fixed candidates and no access distribution")
+			}
+		case TemplateStagedFanIn, TemplateFanInFanOut:
+			if len(c.Mix) != 1 || tx.FanIn < 2 || tx.FanIn >= c.TransactionsPerBlock || c.BlockCount > c.KeySpace/c.TransactionsPerBlock {
+				return bad("fan-in diagnostics require a single template, 2 <= fan_in < block size and one key per transaction")
+			}
+			if tx.ReadKeys != 0 || tx.UpdateKeys != 0 || tx.CandidateKeys != 0 || tx.Access != (AccessConfig{}) {
+				return bad("fan-in diagnostics assign their own read/write sets")
+			}
+		default:
+			return bad("unknown transaction template")
 		}
-	} else if config.StageFanIn != 0 {
-		return ErrUnexpectedShapeParameter
 	}
-	if config.ProgramShape == ProgramShapeFanInFanOut {
-		if config.FanIn < 2 || config.FanIn >= config.TransactionsPerBlock {
-			return ErrInvalidFanIn
-		}
-		if config.BlockCount > config.KeySpace/config.TransactionsPerBlock {
-			return ErrStructuredKeySpace
-		}
-	} else if config.FanIn != 0 {
-		return ErrUnexpectedShapeParameter
-	}
-	if (config.ProgramShape == ProgramShapeSelectiveReadSet ||
-		config.ProgramShape == ProgramShapeStagedFanIn ||
-		config.ProgramShape == ProgramShapeFanInFanOut) &&
-		config.AccessDistribution != nil {
-		return ErrStructuredDistribution
-	}
-	if err := validateAccessDistribution(config); err != nil {
-		return err
-	}
-	// Int63n needs MaxComputeUnits+1 to remain a positive int64. This also
-	// leaves ample room for the fixed per-transaction instruction costs.
-	if config.MaxComputeUnits >= uint64(math.MaxInt64) {
-		return ErrInvalidTransactionBudget
-	}
-	minimumUnits := config.MaxComputeUnits + 4
-	if config.ProgramShape == ProgramShapeStateDependentBranch {
-		minimumUnits = config.MaxComputeUnits + 7
-	} else if config.ProgramShape == ProgramShapeSelectiveReadSet {
-		minimumUnits = config.MaxComputeUnits + uint64(config.BranchReadCandidates) + 5
-	} else if config.ProgramShape == ProgramShapeStagedFanIn {
-		minimumUnits = config.MaxComputeUnits + uint64(config.StageFanIn) + 3
-	} else if config.ProgramShape == ProgramShapeFanInFanOut {
-		minimumUnits = config.MaxComputeUnits + uint64(config.FanIn) + 3
-	}
-	if config.TransactionMaxUnits < minimumUnits {
-		return ErrInvalidTransactionBudget
+	if math.IsInf(totalWeight, 0) {
+		return bad("sum of weights overflows")
 	}
 	return nil
 }
 
-func validateAccessDistribution(config Config) error {
-	distribution := config.AccessDistribution
-	if distribution == nil {
-		return nil
+func probability(v float64) bool { return !math.IsNaN(v) && v >= 0 && v <= 1 }
+
+type keySampler struct {
+	size   int
+	access AccessConfig
+	cdf    []float64
+}
+
+func newKeySampler(size int, access AccessConfig) keySampler {
+	s := keySampler{size: size, access: access}
+	if access.Kind == "zipf" {
+		s.cdf = make([]float64, size)
+		var sum float64
+		for i := range s.cdf {
+			sum += math.Pow(float64(i+1), -access.Theta)
+			s.cdf[i] = sum
+		}
 	}
-	if math.IsNaN(distribution.ReadWriteSameKeyProbability) ||
-		distribution.ReadWriteSameKeyProbability < 0 || distribution.ReadWriteSameKeyProbability > 1 {
-		return ErrInvalidReadWriteCorrelation
-	}
-	switch distribution.Kind {
-	case AccessDistributionUniform:
-		if distribution.HotKeyCount != 0 || distribution.HotAccessProbability != 0 {
-			return ErrInvalidAccessDistribution
+	return s
+}
+
+func (s *keySampler) key(rng *rand.Rand) int {
+	switch s.access.Kind {
+	case "hotspot":
+		if rng.Float64() < s.access.HotProbability {
+			return rng.Intn(s.access.HotKeys)
 		}
-	case AccessDistributionHotspot:
-		if distribution.HotKeyCount <= 0 || distribution.HotKeyCount >= config.KeySpace {
-			return ErrInvalidHotKeyCount
-		}
-		if math.IsNaN(distribution.HotAccessProbability) ||
-			distribution.HotAccessProbability <= 0 || distribution.HotAccessProbability >= 1 {
-			return ErrInvalidHotProbability
-		}
+		return s.access.HotKeys + rng.Intn(s.size-s.access.HotKeys)
+	case "zipf":
+		u := rng.Float64() * s.cdf[len(s.cdf)-1]
+		return sort.Search(len(s.cdf), func(i int) bool { return s.cdf[i] >= u })
 	default:
-		return ErrInvalidAccessDistribution
+		return rng.Intn(s.size)
 	}
-	return nil
 }
 
-func generatorVersion(config Config) string {
-	if config.ProgramShape == ProgramShapeSelectiveReadSet ||
-		config.ProgramShape == ProgramShapeStagedFanIn ||
-		config.ProgramShape == ProgramShapeFanInFanOut {
-		return GeneratorVersionV3
-	}
-	if config.AccessDistribution != nil || config.MinComputeUnits != 0 {
-		return GeneratorVersionV2
-	}
-	return GeneratorVersion
-}
-
-func sampleKeyIndex(rng *rand.Rand, config Config) int {
-	distribution := config.AccessDistribution
-	if distribution == nil || distribution.Kind == AccessDistributionUniform {
-		return rng.Intn(config.KeySpace)
-	}
-	if rng.Float64() < distribution.HotAccessProbability {
-		return rng.Intn(distribution.HotKeyCount)
-	}
-	return distribution.HotKeyCount + rng.Intn(config.KeySpace-distribution.HotKeyCount)
-}
-
-func sampleWriteKeyIndex(rng *rand.Rand, config Config, readKeyIndex int) (int, bool) {
-	distribution := config.AccessDistribution
-	if distribution != nil && (distribution.ReadWriteSameKeyProbability == 1 ||
-		distribution.ReadWriteSameKeyProbability > 0 && rng.Float64() < distribution.ReadWriteSameKeyProbability) {
-		return readKeyIndex, true
-	}
-	return sampleKeyIndex(rng, config), false
-}
-
-type programTruth struct {
-	branching         bool
-	branchTaken       bool
-	selectorRead      int
-	untakenRead       int
-	takenRead         int
-	write             int
-	conditionalJump   int
-	unconditionalJump int
-	explicit          *explicitProgramTruth
-}
-
-type explicitProgramTruth struct {
-	path     []int
-	reads    []int
-	writes   []int
-	branches []explicitBranchTruth
-}
-
-type explicitBranchTruth struct {
-	instruction int
-	taken       bool
-}
-
-func flatProgram(readKey, writeKey []byte, delta int64, computeUnits uint64) ([]model.Instruction, programTruth) {
-	return []model.Instruction{
-		{Op: model.OpRead, Key: readKey, Register: "value"},
-		{Op: model.OpCompute, ComputeUnits: computeUnits},
-		{
-			Op:  model.OpWrite,
-			Key: writeKey,
-			Expression: model.Expression{
-				Base:  model.Register("value"),
-				Delta: delta,
-			},
-		},
-	}, programTruth{selectorRead: 0, write: 2}
-}
-
-func stateDependentBranchProgram(
-	selectorKey []byte,
-	branchTaken bool,
-	untakenReadKey []byte,
-	takenReadKey []byte,
-	writeKey []byte,
-	delta int64,
-	computeUnits uint64,
-) ([]model.Instruction, programTruth) {
-	return []model.Instruction{
-			{Op: model.OpRead, Key: selectorKey, Register: "selector"},
-			{
-				Op: model.OpJumpIf,
-				Condition: model.Condition{
-					Kind:  model.ConditionLess,
-					Left:  model.Register("selector"),
-					Right: model.Literal(5_000),
-				},
-				Target: 4,
-			},
-			{Op: model.OpRead, Key: untakenReadKey, Register: "value"},
-			{Op: model.OpJumpIf, Condition: model.Condition{Kind: model.ConditionAlways}, Target: 5},
-			{Op: model.OpRead, Key: takenReadKey, Register: "value"},
-			{Op: model.OpCompute, ComputeUnits: computeUnits},
-			{
-				Op:  model.OpWrite,
-				Key: writeKey,
-				Expression: model.Expression{
-					Base:  model.Register("value"),
-					Delta: delta,
-				},
-			},
-		}, programTruth{
-			branching:         true,
-			branchTaken:       branchTaken,
-			selectorRead:      0,
-			untakenRead:       2,
-			takenRead:         4,
-			write:             6,
-			conditionalJump:   1,
-			unconditionalJump: 3,
-		}
-}
-
-func selectiveReadSetProgram(
-	selectorKey []byte,
-	selectorValue int64,
-	candidateReadKeys [][]byte,
-	writeKey []byte,
-	delta int64,
-	computeUnits uint64,
-) ([]model.Instruction, programTruth) {
-	candidateCount := len(candidateReadKeys)
-	selectedCandidate := int(selectorValue) * candidateCount / 10_000
-	instructions := []model.Instruction{{Op: model.OpRead, Key: selectorKey, Register: "selector"}}
-	conditionalIndices := make([]int, 0, candidateCount-1)
-	for candidateIndex := 0; candidateIndex < candidateCount-1; candidateIndex++ {
-		conditionalIndices = append(conditionalIndices, len(instructions))
-		threshold := int64(((candidateIndex+1)*10_000 + candidateCount - 1) / candidateCount)
-		instructions = append(instructions, model.Instruction{
-			Op: model.OpJumpIf,
-			Condition: model.Condition{
-				Kind:  model.ConditionLess,
-				Left:  model.Register("selector"),
-				Right: model.Literal(threshold),
-			},
-		})
-	}
-	defaultJumpIndex := len(instructions)
-	instructions = append(instructions, model.Instruction{
-		Op:        model.OpJumpIf,
-		Condition: model.Condition{Kind: model.ConditionAlways},
-	})
-
-	candidateReadIndices := make([]int, candidateCount)
-	candidateJumpIndices := make([]int, candidateCount-1)
-	for candidateIndex, candidateKey := range candidateReadKeys {
-		candidateReadIndices[candidateIndex] = len(instructions)
-		instructions = append(instructions, model.Instruction{
-			Op:       model.OpRead,
-			Key:      candidateKey,
-			Register: "value",
-		})
-		if candidateIndex < candidateCount-1 {
-			candidateJumpIndices[candidateIndex] = len(instructions)
-			instructions = append(instructions, model.Instruction{
-				Op:        model.OpJumpIf,
-				Condition: model.Condition{Kind: model.ConditionAlways},
-			})
-		}
-	}
-	computeIndex := len(instructions)
-	instructions = append(instructions,
-		model.Instruction{Op: model.OpCompute, ComputeUnits: computeUnits},
-		model.Instruction{
-			Op:  model.OpWrite,
-			Key: writeKey,
-			Expression: model.Expression{
-				Base:  model.Register("value"),
-				Delta: delta,
-			},
-		},
-	)
-	writeIndex := len(instructions) - 1
-	for candidateIndex, conditionalIndex := range conditionalIndices {
-		instructions[conditionalIndex].Target = candidateReadIndices[candidateIndex]
-	}
-	instructions[defaultJumpIndex].Target = candidateReadIndices[candidateCount-1]
-	for _, jumpIndex := range candidateJumpIndices {
-		instructions[jumpIndex].Target = computeIndex
-	}
-
-	path := []int{0}
-	branchTruth := make([]explicitBranchTruth, 0, candidateCount+1)
-	for candidateIndex, conditionalIndex := range conditionalIndices {
-		taken := candidateIndex == selectedCandidate
-		path = append(path, conditionalIndex)
-		branchTruth = append(branchTruth, explicitBranchTruth{instruction: conditionalIndex, taken: taken})
-		if taken {
-			break
-		}
-	}
-	if selectedCandidate == candidateCount-1 {
-		path = append(path, defaultJumpIndex)
-		branchTruth = append(branchTruth, explicitBranchTruth{instruction: defaultJumpIndex, taken: true})
-	}
-	path = append(path, candidateReadIndices[selectedCandidate])
-	if selectedCandidate < candidateCount-1 {
-		jumpIndex := candidateJumpIndices[selectedCandidate]
-		path = append(path, jumpIndex)
-		branchTruth = append(branchTruth, explicitBranchTruth{instruction: jumpIndex, taken: true})
-	}
-	path = append(path, computeIndex, writeIndex)
-
-	return instructions, programTruth{explicit: &explicitProgramTruth{
-		path:     path,
-		reads:    []int{0, candidateReadIndices[selectedCandidate]},
-		writes:   []int{writeIndex},
-		branches: branchTruth,
-	}}
-}
-
-func stagedFanInProgram(
-	transactionIndex int,
-	globalTransaction int,
-	fanIn int,
-	delta int64,
-	computeUnits uint64,
-) ([]model.Instruction, programTruth) {
-	role := transactionIndex % (fanIn + 1)
-	stage := transactionIndex / (fanIn + 1)
-	writeKey := stateKey(globalTransaction)
-	if role < fanIn {
-		readKey := writeKey
-		if stage > 0 {
-			readKey = stateKey(globalTransaction - role - 1)
-		}
-		return flatProgram(readKey, writeKey, delta, computeUnits)
-	}
-
-	instructions := make([]model.Instruction, 0, fanIn+2)
-	readIndices := make([]int, 0, fanIn)
-	for predecessor := globalTransaction - fanIn; predecessor < globalTransaction; predecessor++ {
-		readIndices = append(readIndices, len(instructions))
-		register := fmt.Sprintf("fanin-%d", predecessor)
-		if len(readIndices) == 1 {
-			register = "value"
-		}
-		instructions = append(instructions, model.Instruction{
-			Op:       model.OpRead,
-			Key:      stateKey(predecessor),
-			Register: register,
-		})
-	}
-	instructions = append(instructions,
-		model.Instruction{Op: model.OpCompute, ComputeUnits: computeUnits},
-		model.Instruction{
-			Op:  model.OpWrite,
-			Key: writeKey,
-			Expression: model.Expression{
-				Base:  model.Register("value"),
-				Delta: delta,
-			},
-		},
-	)
-	writeIndex := len(instructions) - 1
-	path := make([]int, len(instructions))
-	for index := range path {
-		path[index] = index
-	}
-	return instructions, programTruth{explicit: &explicitProgramTruth{
-		path:   path,
-		reads:  readIndices,
-		writes: []int{writeIndex},
-	}}
-}
-
-func fanInFanOutProgram(
-	transactionIndex int,
-	globalTransaction int,
-	fanIn int,
-	delta int64,
-	computeUnits uint64,
-) ([]model.Instruction, programTruth) {
-	writeKey := stateKey(globalTransaction)
-	if transactionIndex < fanIn {
-		return flatProgram(writeKey, writeKey, delta, computeUnits)
-	}
-
-	blockBase := globalTransaction - transactionIndex
-	instructions := make([]model.Instruction, 0, fanIn+2)
-	readIndices := make([]int, 0, fanIn)
-	for predecessor := blockBase; predecessor < blockBase+fanIn; predecessor++ {
-		readIndices = append(readIndices, len(instructions))
-		register := fmt.Sprintf("fanin-%d", predecessor)
-		if len(readIndices) == 1 {
-			register = "value"
-		}
-		instructions = append(instructions, model.Instruction{
-			Op:       model.OpRead,
-			Key:      stateKey(predecessor),
-			Register: register,
-		})
-	}
-	instructions = append(instructions,
-		model.Instruction{Op: model.OpCompute, ComputeUnits: computeUnits},
-		model.Instruction{
-			Op:  model.OpWrite,
-			Key: writeKey,
-			Expression: model.Expression{
-				Base:  model.Register("value"),
-				Delta: delta,
-			},
-		},
-	)
-	writeIndex := len(instructions) - 1
-	path := make([]int, len(instructions))
-	for index := range path {
-		path[index] = index
-	}
-	return instructions, programTruth{explicit: &explicitProgramTruth{
-		path:   path,
-		reads:  readIndices,
-		writes: []int{writeIndex},
-	}}
-}
-
-func (truth programTruth) actualInstructionIndices(willFail bool, instructionCount int) []int {
-	if truth.explicit != nil {
-		indices := append([]int(nil), truth.explicit.path...)
-		if willFail {
-			indices = append(indices, instructionCount-2)
+func (s *keySampler) keys(rng *rand.Rand, count int) []int {
+	keys := make([]int, 0, count)
+	seen := make(map[int]bool, count)
+	hotTaken := 0
+	for len(keys) < count {
+		var k int
+		if s.access.Kind == "hotspot" {
+			// Condition on keys not yet selected. Once the hot set is full,
+			// draw directly from the cold tail, even for probabilities near 1.
+			hot := s.access.HotKeys
+			cold := s.size - hot
+			h := s.access.HotProbability * float64(hot-hotTaken) / float64(hot)
+			c := (1 - s.access.HotProbability) * float64(cold-(len(keys)-hotTaken)) / float64(cold)
+			start, size := hot, cold
+			if rng.Float64()*(h+c) < h {
+				start, size = 0, hot
+				hotTaken++
+			}
+			for {
+				k = start + rng.Intn(size)
+				if !seen[k] {
+					break
+				}
+			}
 		} else {
-			indices = append(indices, instructionCount-1)
+			k = s.key(rng)
 		}
-		return indices
-	}
-	if !truth.branching {
-		count := instructionCount
-		if willFail {
-			count-- // RETURN is structurally present but unreachable.
+		if !seen[k] {
+			keys = append(keys, k)
+			seen[k] = true
 		}
-		indices := make([]int, count)
-		for index := range indices {
-			indices[index] = index
-		}
-		return indices
 	}
-
-	indices := []int{truth.selectorRead, truth.conditionalJump}
-	if truth.branchTaken {
-		indices = append(indices, truth.takenRead)
-	} else {
-		indices = append(indices, truth.untakenRead, truth.unconditionalJump)
-	}
-	indices = append(indices, 5, truth.write)
-	if willFail {
-		indices = append(indices, instructionCount-2)
-	} else {
-		indices = append(indices, instructionCount-1)
-	}
-	return indices
+	return keys
 }
 
-func (truth programTruth) accesses(instructions []model.Instruction) []workload.GroundTruthAccess {
-	if truth.explicit != nil {
-		accesses := make([]workload.GroundTruthAccess, 0, len(truth.explicit.reads)+len(truth.explicit.writes))
-		for _, readIndex := range truth.explicit.reads {
-			accesses = append(accesses, workload.GroundTruthAccess{
-				OperationID: instructions[readIndex].ID,
-				Mode:        workload.AccessRead,
-				Key:         cloneBytes(instructions[readIndex].Key),
-			})
-		}
-		for _, writeIndex := range truth.explicit.writes {
-			accesses = append(accesses, workload.GroundTruthAccess{
-				OperationID: instructions[writeIndex].ID,
-				Mode:        workload.AccessWrite,
-				Key:         cloneBytes(instructions[writeIndex].Key),
-			})
-		}
-		return accesses
+func linearProgram(reads, writes []int, delta int64, prefix, suffix uint64) []model.Instruction {
+	p := []model.Instruction{{Op: model.OpCompute, ComputeUnits: prefix}}
+	for i, key := range reads {
+		p = append(p, model.Instruction{Op: model.OpRead, Key: stateKey(key), Register: fmt.Sprintf("r%d", i)})
 	}
-	readIndex := truth.selectorRead
-	accesses := make([]workload.GroundTruthAccess, 0, 3)
-	if truth.branching {
-		accesses = append(accesses, workload.GroundTruthAccess{
-			OperationID: instructions[truth.selectorRead].ID,
-			Mode:        workload.AccessRead,
-			Key:         cloneBytes(instructions[truth.selectorRead].Key),
-		})
-		if truth.branchTaken {
-			readIndex = truth.takenRead
+	p = append(p, model.Instruction{Op: model.OpCompute, ComputeUnits: suffix})
+	for i, key := range writes {
+		p = append(p, model.Instruction{Op: model.OpWrite, Key: stateKey(key), Expression: model.Expression{Base: model.Register(fmt.Sprintf("r%d", i%len(reads))), Delta: delta}})
+	}
+	return p
+}
+
+// Selector keys are in the initialized, read-only tail [KeySpace, InitialKeys).
+// COMPUTE models CPU cost; JUMP consumes the selector value, not a computed
+// address. A common suffix/write keeps conservative reads and exact writes
+// separate for the existing selective-read diagnostic.
+func branchProgram(selector int, candidates []int, write int, delta int64, prefix, suffix uint64) []model.Instruction {
+	p := []model.Instruction{
+		{Op: model.OpRead, Key: stateKey(selector), Register: "selector"},
+		{Op: model.OpCompute, ComputeUnits: prefix},
+	}
+	for i := 0; i < len(candidates)-1; i++ {
+		threshold := int64(((i+1)*10_000 + len(candidates) - 1) / len(candidates))
+		p = append(p, model.Instruction{Op: model.OpJumpIf, Condition: model.Condition{Kind: model.ConditionLess, Left: model.Register("selector"), Right: model.Literal(threshold)}})
+	}
+	fallback := len(p)
+	p = append(p, model.Instruction{Op: model.OpJumpIf, Condition: model.Condition{Kind: model.ConditionAlways}})
+	var exits []int
+	for i, key := range candidates {
+		if i < len(candidates)-1 {
+			p[2+i].Target = len(p)
 		} else {
-			readIndex = truth.untakenRead
+			p[fallback].Target = len(p)
 		}
+		p = append(p, model.Instruction{Op: model.OpRead, Key: stateKey(key), Register: "r0"})
+		exits = append(exits, len(p))
+		p = append(p, model.Instruction{Op: model.OpJumpIf, Condition: model.Condition{Kind: model.ConditionAlways}})
 	}
-	accesses = append(accesses,
-		workload.GroundTruthAccess{
-			OperationID: instructions[readIndex].ID,
-			Mode:        workload.AccessRead,
-			Key:         cloneBytes(instructions[readIndex].Key),
-		},
-		workload.GroundTruthAccess{
-			OperationID: instructions[truth.write].ID,
-			Mode:        workload.AccessWrite,
-			Key:         cloneBytes(instructions[truth.write].Key),
-		},
+	for _, exit := range exits {
+		p[exit].Target = len(p)
+	}
+	p = append(p,
+		model.Instruction{Op: model.OpCompute, ComputeUnits: suffix},
+		model.Instruction{Op: model.OpWrite, Key: stateKey(write), Expression: model.Expression{Base: model.Register("r0"), Delta: delta}},
 	)
-	return accesses
+	return p
 }
 
-func (truth programTruth) branches(instructions []model.Instruction) []workload.BranchOutcome {
-	if truth.explicit != nil {
-		branches := make([]workload.BranchOutcome, 0, len(truth.explicit.branches))
-		for _, branch := range truth.explicit.branches {
-			branches = append(branches, workload.BranchOutcome{
-				BranchID: instructions[branch.instruction].ID,
-				Taken:    branch.taken,
-				Target:   instructions[branch.instruction].Target,
-			})
-		}
-		return branches
-	}
-	if !truth.branching {
-		return make([]workload.BranchOutcome, 0)
-	}
-	branches := []workload.BranchOutcome{{
-		BranchID: instructions[truth.conditionalJump].ID,
-		Taken:    truth.branchTaken,
-		Target:   instructions[truth.conditionalJump].Target,
-	}}
-	if !truth.branchTaken {
-		branches = append(branches, workload.BranchOutcome{
-			BranchID: instructions[truth.unconditionalJump].ID,
-			Taken:    true,
-			Target:   instructions[truth.unconditionalJump].Target,
-		})
-	}
-	return branches
-}
-
-func stateKey(index int) []byte {
-	return []byte(fmt.Sprintf("key-%08d", index))
-}
-
-func operationID(blockIndex, transactionIndex, instructionIndex int) string {
-	return fmt.Sprintf("op-%06d-%06d-%03d", blockIndex, transactionIndex, instructionIndex)
-}
-
-func cloneBytes(value []byte) []byte {
-	return append([]byte(nil), value...)
-}
+func stateKey(i int) []byte { return []byte(fmt.Sprintf("key-%08d", i)) }

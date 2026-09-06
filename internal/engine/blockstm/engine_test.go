@@ -69,9 +69,8 @@ func TestGeneratedArtifactsMatchAcrossSeedsAndWorkers(t *testing.T) {
 			KeySpace:             4,
 			BlockCount:           2,
 			TransactionsPerBlock: 24,
-			MaxComputeUnits:      32,
-			TransactionMaxUnits:  36,
 			FailureEvery:         7,
+			Mix:                  []synthetic.TransactionConfig{{Weight: 1, Template: synthetic.TemplateReadWrite, ReadKeys: 1, UpdateKeys: 1, Compute: synthetic.ComputeConfig{MinUnits: 0, MaxUnits: 32}}},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -118,9 +117,8 @@ func TestFiniteSpeculationLimitsMatchSerialAcrossSeedsAndWorkers(t *testing.T) {
 			KeySpace:             int(seed%4) + 1,
 			BlockCount:           2,
 			TransactionsPerBlock: 32,
-			MaxComputeUnits:      64,
-			TransactionMaxUnits:  68,
 			FailureEvery:         9,
+			Mix:                  []synthetic.TransactionConfig{{Weight: 1, Template: synthetic.TemplateReadWrite, ReadKeys: 1, UpdateKeys: 1, Compute: synthetic.ComputeConfig{MinUnits: 0, MaxUnits: 64}}},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -165,9 +163,8 @@ func TestFiniteSpeculationLimitEmitsBoundedAdmissionTelemetry(t *testing.T) {
 		KeySpace:             1,
 		BlockCount:           1,
 		TransactionsPerBlock: 64,
-		MaxComputeUnits:      128,
-		TransactionMaxUnits:  132,
 		FailureEvery:         0,
+		Mix:                  []synthetic.TransactionConfig{{Weight: 1, Template: synthetic.TemplateReadWrite, ReadKeys: 1, UpdateKeys: 1, Compute: synthetic.ComputeConfig{MinUnits: 0, MaxUnits: 128}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -248,9 +245,8 @@ func TestEngineCanExecuteIndependentBlocksConcurrently(t *testing.T) {
 		KeySpace:             3,
 		BlockCount:           1,
 		TransactionsPerBlock: 32,
-		MaxComputeUnits:      16,
-		TransactionMaxUnits:  20,
 		FailureEvery:         5,
+		Mix:                  []synthetic.TransactionConfig{{Weight: 1, Template: synthetic.TemplateReadWrite, ReadKeys: 1, UpdateKeys: 1, Compute: synthetic.ComputeConfig{MinUnits: 0, MaxUnits: 16}}},
 	})
 	if err != nil {
 		t.Fatal(err)

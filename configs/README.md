@@ -6,23 +6,99 @@
 
 `max_speculative_inflight` is the static admission budget. Zero selects the original full-block window `W`; a positive value is reduced to `min(L,W)` for each block. The worker count remains fixed while `L` changes. A transaction occupies one slot until it enters the continuous stable validated frontier, including suspension and every incarnation; reexecution does not acquire another slot.
 
-Synthetic workloads default to the legacy uniform key distribution. Setting
-`access_distribution.kind` to `hotspot` divides the configured `key_space`
-into the first `hot_key_count` hot keys and a cold tail; each read and write
-independently selects the hot set with `hot_access_probability`, then samples
-uniformly inside the selected set. This expresses a large address space with a
-small hot working set without collapsing all cold keys into the hotspot.
-`min_compute_units` optionally changes the legacy `[0, max_compute_units]`
-uniform compute range to `[min_compute_units, max_compute_units]`; setting the
-minimum equal to the maximum produces fixed-cost transactions and separates
-compute-time skew from access skew.
-`access_distribution.read_write_same_key_probability` controls read/write
-correlation independently of hot-set selection. Zero preserves independent
-sampling; one models a read-modify-write against the same selected key.
+## Synthetic workloads
+
+`workload.synthetic` contains `seed`, `initial_keys`, `key_space`, `block_count`,
+`transactions_per_block`, and a `mix` of transaction templates. Optional
+`failure_every` injects semantic failures for rollback tests. The generator is
+`synthetic-v4`, producing `workload-artifact-v3`. Old workload fields have been
+migrated; use the recorded Git revision for historical inputs/results.
+
+Each mix entry has a positive `weight`, a `template`, an `access` distribution,
+and `compute: {min_units, max_units, prefix_fraction}`. Weights define independent
+per-transaction sampling probabilities, not exact counts per block. Equal cost
+bounds specify a fixed amount of CPU work. For total work `U`, prefix work is
+`floor(float64(U) * prefix_fraction)` and suffix work is the remainder.
+
+| Template | Parameters and semantics |
+| --- | --- |
+| `rmw` | `read_keys >= 1`, `0 <= update_keys <= read_keys`. Sample distinct reads; update the first `update_keys` using each key's own read value plus a transaction delta. Zero updates gives read-only transactions. |
+| `read_write` | Distinct `read_keys` and independently sampled distinct `update_keys`; read/write sets may overlap. Writes use successive read registers, cycling if needed. |
+| `state_dependent_branch` | Read a selector, choose between two sampled data keys, then write one independently sampled concrete key. |
+| `selective_read_set` | `candidate_keys` fixes the candidate data set to the first K keys. Read a selector and one candidate, then write the concrete key selected by the initial selector. The selector namespace is read-only, so this isolates conservative reads versus precise static writes. |
+| `staged_fan_in` | `fan_in` producers feed each join; subsequent producers read the preceding join. |
+| `fan_in_fan_out` | The first `fan_in` producers feed every remaining consumer in that block. |
+
+RMW, read/write and selector templates may share a block through `mix`. Fan-in
+structures use a single template because transaction positions define the graph;
+they require one data key per generated transaction. Selector keys occupy the
+initialized read-only tail `[key_space, initial_keys)`. Selective and fan-in
+structures assign their own keys and omit `access`.
+
+Key distributions for RMW, read/write and two-way branch templates:
+
+- `uniform` (also the omitted default).
+- `hotspot`: `hot_keys` selects the first H keys; `hot_probability` assigns total
+  probability to that set, with the remainder in the cold tail. Values 0 and 1
+  are supported when the requested distinct key count fits the selected set.
+- `zipf`: finite rank probabilities proportional to `rank^(-theta)` for ranks
+  1 through `key_space`, with `theta` in `[0,1]`. Theta 0 is uniform. This uses a
+  finite CDF; Go's `rand.NewZipf` requires an exponent greater than 1.
+
+Multiple-key sampling is without replacement **within each read/write set**;
+probabilities are conditioned on remaining keys. Reported hotspot probability
+therefore describes the first draw, not a guaranteed share of distinct accesses.
+RMW expresses actual read/write correlation. A mix of RMW and independent
+read/write transactions replaces the old forced-reuse probability.
+
+Linear programs execute:
+
+```text
+COMPUTE(prefix) -> READ(k1..kr) -> COMPUTE(suffix) -> WRITE(...) -> RETURN
+```
+
+Selector programs execute:
+
+```text
+READ(selector) -> COMPUTE(prefix) -> JUMP(selector) -> READ(candidate)
+               -> COMPUTE(suffix) -> WRITE(concrete key) -> RETURN
+```
+
+A state read is not required to begin input-driven computation. COMPUTE currently
+models deterministic CPU work; it neither transforms the selector nor produces
+an address. The selector layout models work between obtaining a state parameter
+and accessing the selected data, not computed dynamic addressing. Adding actual
+computed addresses would require a separate runtime change.
+
+Initial state, key/delta sampling, cost sampling and mixture sampling use separate
+seeded RNG streams. With the same seed and mixture, changing cost bounds or prefix
+placement preserves keys and order. Both COMPUTE instructions remain present at
+zero cost so placement comparisons preserve instruction count. Split variants
+keep total work, reads, writes and serial final state equal; their compute result
+digests may differ. Each variant is compared with its own serial oracle.
+
+The generator derives a sufficient gas budget from the concrete program. Actual
+paths and results come from serial execution; there is no generated ground-truth
+copy. Input generation remains outside the measured execution interval.
+
+[standard-smoke.json](experiments/workload/standard-smoke.json) mixes a cheap hot
+RMW, a more expensive multi-key RMW, and a selector workload. It fixes `P=8`,
+`L=W`, and compares runtime, Direct-ready and estimate-abort. Locally use
+`bench validate`; run performance measurements on the server. The full-window
+unit tests also cover single/multi-key, read-only, selector, fan-out and mixed
+workloads at prefix fractions 0, 0.5 and 1.
+
+The design follows [transactional YCSB in Aria](https://github.com/luyi0619/aria/blob/master/benchmark/ycsb/Query.h),
+[YCSB access distributions](https://github.com/brianfrankcooper/YCSB/wiki/Core-Properties),
+[CHIRON's distributions and simplified contracts](https://arxiv.org/html/2401.14278v1),
+and [Aptos transaction mixtures](https://github.com/aptos-labs/aptos-core/blob/main/crates/transaction-generator-lib/src/transaction_mix_generator.rs).
+These are design references; this generator does not reproduce their full workloads.
+
+## Dependency controls
 
 Dependency acquisition, representation, and legacy scheduling use are represented by separate fields so one stage's cost cannot be hidden inside a mechanism label:
 
-- `dependency_source ∈ {runtime_observed, static_program}` selects acquisition. `static_program` scans only engine-visible transaction programs inside the timed interval and never reads workload ground truth.
+- `dependency_source ∈ {runtime_observed, static_program}` selects acquisition. `static_program` scans only engine-visible transaction programs inside the timed interval.
 - `dependency_representation ∈ {version_only, raw_last_writer, max_raw_predecessor, full_conflict_graph}` selects the materialized structure without selecting a consumer.
 - `dependency_representation_builder ∈ {none, indexed_by_key, quadratic_reference}` records how the structure is built. `version_only` requires `none`; RAW/summary representations use `indexed_by_key`; a full graph permits either the diagnostic quadratic reference or the correctness-equivalent key-indexed builder.
 - `dependency_wait_policy ∈ {none, direct_predecessor_wait, contiguous_frontier_wait, all_predecessors_wait}` selects the representation consumer.

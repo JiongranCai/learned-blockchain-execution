@@ -128,35 +128,20 @@ def workload_label(profile, compute_units, seed):
 
 
 def synthetic_workload(profile, compute_units, seed):
-    common = {
+    selective = profile["kind"] == "selective"
+    return {
         "seed": seed,
+        "initial_keys": 2048 if selective else 1024,
+        "key_space": 64 if selective else 1024,
         "block_count": 2,
         "transactions_per_block": 512,
-        "max_compute_units": compute_units,
-        "min_compute_units": compute_units,
-        "failure_every": 0,
+        "mix": [{
+            "weight": 1,
+            "template": "selective_read_set" if selective else "fan_in_fan_out",
+            "candidate_keys" if selective else "fan_in": profile["width"],
+            "compute": {"min_units": compute_units, "max_units": compute_units, "prefix_fraction": 0},
+        }],
     }
-    if profile["kind"] == "selective":
-        common.update(
-            {
-                "initial_keys": 2048,
-                "key_space": 64,
-                "transaction_max_units": compute_units + profile["width"] + 5,
-                "program_shape": "selective_read_set",
-                "branch_read_candidates": profile["width"],
-            }
-        )
-    else:
-        common.update(
-            {
-                "initial_keys": 1024,
-                "key_space": 1024,
-                "transaction_max_units": compute_units + profile["width"] + 3,
-                "program_shape": "fan_in_fan_out",
-                "fan_in": profile["width"],
-            }
-        )
-    return common
 
 
 def matrix(run_id, run_class, profile, compute_units, seed):

@@ -8,16 +8,41 @@
       "key_space": 8192,
       "block_count": 1,
       "transactions_per_block": 128,
-      "max_compute_units": 1000,
-      "min_compute_units": 1000,
-      "transaction_max_units": 1004,
       "failure_every": 0,
-      "access_distribution": {
-        "kind": "hotspot",
-        "hot_key_count": 8,
-        "hot_access_probability": 0.9,
-        "read_write_same_key_probability": 0.75
-      }
+      "mix": [
+        {
+          "weight": 0.75,
+          "template": "rmw",
+          "read_keys": 1,
+          "update_keys": 1,
+          "access": {
+            "kind": "hotspot",
+            "hot_keys": 8,
+            "hot_probability": 0.9
+          },
+          "compute": {
+            "min_units": 1000,
+            "max_units": 1000,
+            "prefix_fraction": 0
+          }
+        },
+        {
+          "weight": 0.25,
+          "template": "read_write",
+          "read_keys": 1,
+          "update_keys": 1,
+          "access": {
+            "kind": "hotspot",
+            "hot_keys": 8,
+            "hot_probability": 0.9
+          },
+          "compute": {
+            "min_units": 1000,
+            "max_units": 1000,
+            "prefix_fraction": 0
+          }
+        }
+      ]
     }
   },
   "statistical_protocol": "configs/statistical/protocol-v1.json",

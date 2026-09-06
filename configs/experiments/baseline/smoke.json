@@ -8,9 +8,20 @@
       "key_space": 6,
       "block_count": 3,
       "transactions_per_block": 6,
-      "max_compute_units": 8,
-      "transaction_max_units": 12,
-      "failure_every": 3
+      "failure_every": 3,
+      "mix": [
+        {
+          "weight": 1,
+          "template": "read_write",
+          "read_keys": 1,
+          "update_keys": 1,
+          "compute": {
+            "min_units": 0,
+            "max_units": 8,
+            "prefix_fraction": 0
+          }
+        }
+      ]
     }
   },
   "statistical_protocol": "configs/statistical/protocol-v1.json",

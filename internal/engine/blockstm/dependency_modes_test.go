@@ -38,18 +38,20 @@ func TestDependencyModesMatchSerialAcrossSeedsLimitsAndWorkers(t *testing.T) {
 	for _, shape := range []struct {
 		name  string
 		value string
-	}{{"flat", ""}, {"state-dependent-branch", synthetic.ProgramShapeStateDependentBranch}} {
+	}{{"flat", synthetic.TemplateReadWrite}, {"state-dependent-branch", synthetic.TemplateBranch}} {
 		for seed := int64(0); seed < 3; seed++ {
+			tx := synthetic.TransactionConfig{Weight: 1, Template: shape.value, Compute: synthetic.ComputeConfig{MaxUnits: 24}}
+			if shape.value == synthetic.TemplateReadWrite {
+				tx.ReadKeys, tx.UpdateKeys = 1, 1
+			}
 			artifact, err := synthetic.Generate(synthetic.Config{
 				Seed:                 seed,
 				InitialKeys:          8,
 				KeySpace:             3,
 				BlockCount:           2,
 				TransactionsPerBlock: 20,
-				MaxComputeUnits:      24,
-				TransactionMaxUnits:  31,
 				FailureEvery:         7,
-				ProgramShape:         shape.value,
+				Mix:                  []synthetic.TransactionConfig{tx},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -113,8 +115,7 @@ func TestDependencyTelemetrySeparatesAcquisitionRepresentationAndUse(t *testing.
 		KeySpace:             1,
 		BlockCount:           1,
 		TransactionsPerBlock: 32,
-		MaxComputeUnits:      128,
-		TransactionMaxUnits:  132,
+		Mix:                  []synthetic.TransactionConfig{{Weight: 1, Template: synthetic.TemplateReadWrite, ReadKeys: 1, UpdateKeys: 1, Compute: synthetic.ComputeConfig{MinUnits: 0, MaxUnits: 128}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -207,8 +208,12 @@ func TestDependencyTelemetrySeparatesAcquisitionRepresentationAndUse(t *testing.
 
 func TestEngineRejectsIllegalDependencyControls(t *testing.T) {
 	artifact, err := synthetic.Generate(synthetic.Config{
-		Seed: 1, InitialKeys: 1, KeySpace: 1, BlockCount: 1,
-		TransactionsPerBlock: 1, TransactionMaxUnits: 4,
+		Seed:                 1,
+		InitialKeys:          1,
+		KeySpace:             1,
+		BlockCount:           1,
+		TransactionsPerBlock: 1,
+		Mix:                  []synthetic.TransactionConfig{{Weight: 1, Template: synthetic.TemplateReadWrite, ReadKeys: 1, UpdateKeys: 1, Compute: synthetic.ComputeConfig{MinUnits: 0, MaxUnits: 0}}},
 	})
 	if err != nil {
 		t.Fatal(err)

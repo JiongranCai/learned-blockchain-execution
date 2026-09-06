@@ -152,49 +152,24 @@ def workload_label(profile: dict, compute_units: int, seed: int) -> str:
 
 
 def synthetic_workload(profile: dict, compute_units: int, seed: int) -> dict:
-    value = {
-        "seed": seed,
-        "block_count": 2,
-        "transactions_per_block": 512,
-        "max_compute_units": compute_units,
-        "min_compute_units": compute_units,
-        "failure_every": 0,
-    }
+    cost = {"min_units": compute_units, "max_units": compute_units, "prefix_fraction": 0}
     if profile["kind"] == "conflict":
-        value.update(
-            {
-                "initial_keys": 8192,
-                "key_space": 8192,
-                "transaction_max_units": compute_units + 4,
-                "access_distribution": {
-                    "kind": "hotspot",
-                    "hot_key_count": profile["hot_key_count"],
-                    "hot_access_probability": profile["hot_probability"],
-                    "read_write_same_key_probability": profile["same_key_probability"],
-                },
-            }
-        )
-    elif profile["kind"] == "fanout":
-        value.update(
-            {
-                "initial_keys": 1024,
-                "key_space": 1024,
-                "transaction_max_units": compute_units + profile["width"] + 3,
-                "program_shape": "fan_in_fan_out",
-                "fan_in": profile["width"],
-            }
-        )
+        initial_keys, key_space = 8192, 8192
+        access = {"kind": "hotspot", "hot_keys": profile["hot_key_count"], "hot_probability": profile["hot_probability"]}
+        share = profile["same_key_probability"]
+        mix = [
+            {"weight": weight, "template": template, "read_keys": 1, "update_keys": 1, "access": access, "compute": cost}
+            for template, weight in (("rmw", share), ("read_write", 1-share)) if weight > 0
+        ]
     else:
-        value.update(
-            {
-                "initial_keys": 2048,
-                "key_space": 64,
-                "transaction_max_units": compute_units + profile["width"] + 5,
-                "program_shape": "selective_read_set",
-                "branch_read_candidates": profile["width"],
-            }
-        )
-    return value
+        initial_keys, key_space = (1024, 1024) if profile["kind"] == "fanout" else (2048, 64)
+        template = "fan_in_fan_out" if profile["kind"] == "fanout" else "selective_read_set"
+        count = "fan_in" if profile["kind"] == "fanout" else "candidate_keys"
+        mix = [{"weight": 1, "template": template, count: profile["width"], "compute": cost}]
+    return {
+        "seed": seed, "initial_keys": initial_keys, "key_space": key_space,
+        "block_count": 2, "transactions_per_block": 512, "mix": mix,
+    }
 
 
 def matrix(

@@ -1,0 +1,125 @@
+{
+  "schema_version": "experiment-matrix-v8",
+  "run_class": "smoke",
+  "workload": {
+    "synthetic": {
+      "seed": 42,
+      "initial_keys": 128,
+      "key_space": 64,
+      "block_count": 2,
+      "transactions_per_block": 64,
+      "mix": [
+        {
+          "weight": 1,
+          "template": "rmw",
+          "read_keys": 1,
+          "update_keys": 1,
+          "access": {
+            "kind": "hotspot",
+            "hot_keys": 2,
+            "hot_probability": 0.9
+          },
+          "compute": {
+            "min_units": 16,
+            "max_units": 16,
+            "prefix_fraction": 0
+          }
+        },
+        {
+          "weight": 1,
+          "template": "rmw",
+          "read_keys": 4,
+          "update_keys": 2,
+          "access": {
+            "kind": "uniform"
+          },
+          "compute": {
+            "min_units": 256,
+            "max_units": 256,
+            "prefix_fraction": 0.5
+          }
+        },
+        {
+          "weight": 1,
+          "template": "selective_read_set",
+          "candidate_keys": 4,
+          "compute": {
+            "min_units": 128,
+            "max_units": 128,
+            "prefix_fraction": 0.5
+          }
+        }
+      ]
+    }
+  },
+  "statistical_protocol": "configs/statistical/protocol-v1.json",
+  "warmup_rounds": 1,
+  "measurement_rounds": 3,
+  "order_seed": 20260802,
+  "timeout": "2m",
+  "environment": {
+    "affinity": "uncontrolled_smoke",
+    "numa_policy": "uncontrolled_smoke",
+    "state_reset": "fresh_state_from_frozen_artifact",
+    "page_cache": "unchanged_and_recorded_as_smoke",
+    "process_reuse": "fresh_process_per_run"
+  },
+  "cases": [
+    {
+      "id": "runtime",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_source": "runtime_observed",
+      "dependency_representation": "version_only",
+      "dependency_representation_builder": "none",
+      "dependency_wait_policy": "none",
+      "dependency_estimate_injection": "disabled",
+      "dependency_dispatch": "index_order",
+      "estimate_read_policy": "abort_and_reschedule",
+      "idle_wait_policy": "park",
+      "trace_mode": "counters"
+    },
+    {
+      "id": "direct-ready",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_source": "static_program",
+      "dependency_representation": "raw_last_writer",
+      "dependency_representation_builder": "indexed_by_key",
+      "dependency_wait_policy": "direct_predecessor_wait",
+      "dependency_estimate_injection": "disabled",
+      "dependency_dispatch": "ready_queue",
+      "estimate_read_policy": "abort_and_reschedule",
+      "idle_wait_policy": "park",
+      "trace_mode": "counters"
+    },
+    {
+      "id": "estimate-abort",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_source": "static_program",
+      "dependency_representation": "raw_last_writer",
+      "dependency_representation_builder": "indexed_by_key",
+      "dependency_wait_policy": "none",
+      "dependency_estimate_injection": "write_estimates",
+      "dependency_dispatch": "index_order",
+      "estimate_read_policy": "abort_and_reschedule",
+      "idle_wait_policy": "park",
+      "trace_mode": "counters"
+    }
+  ],
+  "output": {
+    "validation_records": "artifacts/workload-standardization/validation.jsonl",
+    "run_records": "artifacts/workload-standardization/runs.jsonl",
+    "action_traces": "artifacts/workload-standardization/action-traces.jsonl"
+  }
+}

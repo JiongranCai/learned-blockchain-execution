@@ -9,7 +9,7 @@ The current implementation focuses on a reproducible motivation and systems-eval
 - A frozen [`crypto-org-chain/go-block-stm`](https://github.com/crypto-org-chain/go-block-stm) execution kernel at commit `7afe924fb4a611a2626f92338f1f76e4ebefa62f`.
 - A deterministic flat transaction runtime, in-memory state implementation, and preset-order serial oracle.
 - A common engine and policy interface shared by serial execution and Block-STM.
-- Seeded synthetic workloads with configurable uniform or hotspot/cold-tail key-access distributions, stable operation identifiers, state-dependent branches, and an explicit boundary between engine-visible inputs and audit-only ground truth.
+- Seeded transaction mixtures with multi-key RMW/read-only and independent read/write templates, uniform/hotspot/finite-Zipf key sampling, independent CPU-cost sampling, and prefix/suffix placement. Selector and fan-in/fan-out diagnostics share the same program builders; see [workload configuration](configs/README.md#synthetic-workloads).
 - A configurable speculation window through `max_speculative_inflight`.
 - Dependency controls that expose CQ3-I acquisition, CQ3-R representation, and CQ3-U consumers as separate stages:
   - `runtime_observed` uses the mandatory MVCC runtime path;
@@ -70,7 +70,21 @@ go build -trimpath -o /tmp/blockchain-execution-bench ./cmd/bench
 /tmp/blockchain-execution-bench run -config configs/experiments/baseline/smoke.json
 ```
 
-`bench run` first compares each case with the serial oracle, then measures each scheduled run in a fresh process and compares its result digest with the oracle. `bench validate` remains available for a standalone correctness check. Configs and benchmark/validation records use v8; workload descriptors use v2. New runs need no validation bundle or file hashes. Historical runs can be reproduced with their recorded Git revision.
+`bench run` first compares each case with the serial oracle, then measures each scheduled run in a fresh process and compares its result digest with the oracle. `bench validate` remains available for a standalone correctness check. Configs and benchmark/validation records use v8; workload descriptors use v3 (`synthetic-v4`). New runs need no validation bundle or file hashes. Historical runs can be reproduced with their recorded Git revision.
+
+For a local correctness check of the standardized workloads at fixed `P=8`,
+`L=W`, build the runner and validate the [standard matrix](configs/experiments/workload/standard-smoke.json):
+
+```sh
+go build -o /tmp/blockchain-execution-bench ./cmd/bench
+/tmp/blockchain-execution-bench validate -config configs/experiments/workload/standard-smoke.json
+```
+
+Use `run` for performance measurements on the Linux server. Moving a prefix does
+not change the sampled access sequence, but COMPUTE is a CPU-cost model and does
+not generate dynamic addresses. Selector templates read their state parameter
+before the prefix. Historical generated workloads require their recorded Git
+revision; the current generator has one implementation.
 
 Convenience scripts cover the implemented comparison families:
 

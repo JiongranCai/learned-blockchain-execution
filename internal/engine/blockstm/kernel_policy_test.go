@@ -60,20 +60,22 @@ func TestKernelPoliciesMatchSerialOracle(t *testing.T) {
 	shapes := []struct {
 		name  string
 		value string
-	}{{"flat", ""}, {"state-dependent-branch", synthetic.ProgramShapeStateDependentBranch}}
+	}{{"flat", synthetic.TemplateReadWrite}, {"state-dependent-branch", synthetic.TemplateBranch}}
 
 	for _, shape := range shapes {
 		for seed := int64(0); seed < 2; seed++ {
+			tx := synthetic.TransactionConfig{Weight: 1, Template: shape.value, Compute: synthetic.ComputeConfig{MaxUnits: 24}}
+			if shape.value == synthetic.TemplateReadWrite {
+				tx.ReadKeys, tx.UpdateKeys = 1, 1
+			}
 			artifact, err := synthetic.Generate(synthetic.Config{
 				Seed:                 seed,
 				InitialKeys:          8,
 				KeySpace:             3,
 				BlockCount:           2,
 				TransactionsPerBlock: 24,
-				MaxComputeUnits:      24,
-				TransactionMaxUnits:  31,
 				FailureEvery:         7,
-				ProgramShape:         shape.value,
+				Mix:                  []synthetic.TransactionConfig{tx},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -292,9 +294,12 @@ func TestKernelPolicyRejectsUnsupportedCombinations(t *testing.T) {
 // again.
 func TestAbortedAttemptIsAccountedBeforeRedispatch(t *testing.T) {
 	artifact, err := synthetic.Generate(synthetic.Config{
-		Seed: 3, InitialKeys: 64, KeySpace: 2, BlockCount: 1,
-		TransactionsPerBlock: 128, MaxComputeUnits: 512, MinComputeUnits: 512,
-		TransactionMaxUnits: 1024,
+		Seed:                 3,
+		InitialKeys:          64,
+		KeySpace:             2,
+		BlockCount:           1,
+		TransactionsPerBlock: 128,
+		Mix:                  []synthetic.TransactionConfig{{Weight: 1, Template: synthetic.TemplateReadWrite, ReadKeys: 1, UpdateKeys: 1, Compute: synthetic.ComputeConfig{MinUnits: 512, MaxUnits: 512}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -331,6 +336,57 @@ func TestAbortedAttemptIsAccountedBeforeRedispatch(t *testing.T) {
 	for _, counter := range trace.ActionCounters {
 		if counter.Event == control.EventValidationFail && counter.Count > 0 {
 			t.Fatalf("an estimate abort was reported as a validation failure: %#v", counter)
+		}
+	}
+}
+
+// Workload-standardization validation keeps the existing worker target fixed
+// and uses only L=W. It adds no worker-count or finite-window experiment axis.
+func TestUnifiedWorkloadsMatchSerialAtFullWindow(t *testing.T) {
+	for _, fraction := range []float64{0, 0.5, 1} {
+		for _, name := range []string{"single-rmw", "multi-rmw", "readonly", "mixed", "selector", "fanout"} {
+			cost := synthetic.ComputeConfig{MinUnits: 128, MaxUnits: 128, PrefixFraction: fraction}
+			tx := synthetic.TransactionConfig{Weight: 1, Template: synthetic.TemplateRMW, ReadKeys: 1, UpdateKeys: 1, Compute: cost}
+			c := synthetic.Config{Seed: 19, InitialKeys: 128, KeySpace: 64, BlockCount: 2, TransactionsPerBlock: 32}
+			switch name {
+			case "multi-rmw":
+				tx.ReadKeys, tx.UpdateKeys = 4, 2
+				tx.Access = synthetic.AccessConfig{Kind: "zipf", Theta: 0.9}
+			case "readonly":
+				tx.ReadKeys, tx.UpdateKeys = 4, 0
+			case "selector":
+				tx.Template, tx.ReadKeys, tx.UpdateKeys, tx.CandidateKeys = synthetic.TemplateSelective, 0, 0, 4
+			case "fanout":
+				tx.Template, tx.ReadKeys, tx.UpdateKeys, tx.FanIn = synthetic.TemplateFanInFanOut, 0, 0, 4
+			}
+			c.Mix = []synthetic.TransactionConfig{tx}
+			if name == "mixed" {
+				c.Mix[0].Access = synthetic.AccessConfig{Kind: "hotspot", HotKeys: 2, HotProbability: 0.9}
+				c.Mix[0].Compute.MinUnits, c.Mix[0].Compute.MaxUnits = 8, 8
+				tx.ReadKeys, tx.UpdateKeys = 4, 2
+				c.Mix = append(c.Mix, tx)
+			}
+			artifact, err := synthetic.Generate(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, dependency := range kernelDependencyCases() {
+				if dependency.name != "runtime" && dependency.name != "direct-wait" && dependency.name != "estimates" {
+					continue
+				}
+				t.Run(fmt.Sprintf("%s/prefix-%g/%s", name, fraction, dependency.name), func(t *testing.T) {
+					config := engineapi.RunConfig{Executors: 8, MaxSpeculativeInflight: 0,
+						DependencyMode: control.DependencyMVCCRuntime, DependencySource: dependency.source,
+						DependencyRepresentation: dependency.representation, DependencyRepresentationBuilder: dependency.builder,
+						DependencyWaitPolicy: dependency.wait, DependencyEstimateInjection: dependency.estimates,
+						EstimateReadPolicy: control.EstimateReadAbortReschedule, IdleWaitPolicy: control.IdleWaitPark,
+						DependencyDispatch: control.DependencyDispatchIndexOrder}
+					if dependency.gated {
+						config.DependencyDispatch = control.DependencyDispatchReadyQueue
+					}
+					assertMatchesSerialOracle(t, artifact, config)
+				})
+			}
 		}
 	}
 }

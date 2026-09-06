@@ -183,7 +183,6 @@ def gate(files, records, stage):
         require_equal(errors, record, record.get("censored"), False, "censored")
         require_equal(errors, record, record.get("canonical_match"), True, "canonical_match")
         provenance = record.get("provenance", {})
-        require_equal(errors, record, provenance.get("generator_version"), "synthetic-v3", "generator_version")
         require_equal(errors, record, provenance.get("generator_seed"), record["_seed"], "generator_seed")
         hardware = provenance.get("hardware", {})
         require_equal(errors, record, hardware.get("logical_cpus"), 8, "logical_cpus")
