@@ -163,6 +163,48 @@ Add `--suite contention` to test early deferral with heterogeneous computation. 
 
 `scripts/run_hdu_experiment.py RUN_DIR --units-per-ms N --stage pilot|repeated` generates explicit, single-block artifacts with 1/8/32/128 independent motifs. Each motif contains four H (10 ms computation, write its own dependency key), four D (8 ms prefix, read the corresponding H key, 1 ms suffix, write a separate key), and four U (20 ms independent computation). HDU and HUD orders preserve transaction programs and keys; there are no group barriers. Costs are fixed CPU work, not sleeps. Calibrate N on the bound experiment CPUs with `GOMAXPROCS=8 go run scripts/hdu_timeline.go -calibrate`. Pilot covers eight fixed-cost matrices; repeated runs those anchors plus ±10% independent cost jitter at 1/128 motifs with seeds 107/10707/1070707 (20 matrices total). Fixed-cost repetitions use one input, not nominally different workload seeds. The existing 1/3 and 3/30 runner and paired analysis apply. `go run scripts/hdu_timeline.go -config MATRIX -case CASE` records separate diagnostic start/read/end/replay timestamps; diagnostic runs do not enter performance summaries.
 
+`scripts/run_worker_experiment.py RUN_DIR --units-per-ms N --stage pilot|repeated`
+compares `P=1/4/8/16/32/64` at fixed `GOMAXPROCS=8` and `L=W`. Bind the command
+to eight physical CPUs and the corresponding memory node on the experiment
+host, using the same binding for CPU calibration. The script inherits that
+binding; changing P does not change the CPU budget. Host selection and execution
+are separate from local development and validation.
+
+Each matrix shares one workload across 18 cases: the six worker counts crossed
+with Runtime, Direct-ready and Estimate-abort. Their dependency and kernel
+policies come from `standard-smoke.json`; only case IDs and `executors` vary.
+The existing runner interleaves cases within each round, validates against
+serial execution, and starts fresh measurement processes. All cases explicitly
+use `max_speculative_inflight=0` (the full block); finite L is not part of this suite.
+
+The workload profiles are:
+
+- Uniform multi-key RMW (4 reads, 2 updates, 65,536 keys), a low-contention CPU control.
+- Single-key hotspot RMW (1 read/update, 1,024 keys, 99% hot accesses).
+- HDU and HUD, each with 1 and 128 motifs (12 and 1,536 transactions).
+
+Both synthetic profiles use one block of 1,536 transactions, 100k compute units
+per transaction and a 50% prefix. Pilot uses synthetic seed 42; repeated uses
+43/4243. HDU/HUD reuse the fixed-cost generator with seed 101 and zero jitter,
+with identical programs and costs across order/worker comparisons. Calibrate
+`N` once for the fixed CPU budget and reuse it for every P; it specifies CPU
+work, not a guarantee of elapsed milliseconds at other concurrency levels.
+This gives 6 pilot matrices (1/3 warmup/measurement rounds) and 8 repeated
+matrices (3/30). Fixed HDU inputs are repeated measurements, not new workload samples.
+
+`summary.csv` identifies policy and worker count, reports execution time, discarded
+and reexecuted units, validation events/failures, wait counters, summed dependency
+and ESTIMATE wait time, RSS, and the maximum observed per-run runnable-worker peak.
+Other mechanism values are medians across measurement rounds. It also records
+the observed `gomaxprocs` and allowed CPU list. `ratio_to_runtime` compares policies
+at the **same P**; `ratio_to_p8` compares the **same policy** with P=8, paired by round.
+Ratios below one favor the numerator. Both have exploratory, unadjusted 95%
+bootstrap intervals. `comparisons.csv` retains Direct-vs-Runtime/Estimate tests
+at each P; Holm adjustment includes all worker counts within each family/stage.
+Wait times are sums over callbacks and can exceed block wall time; zero ESTIMATE
+suspension is expected for the abort policy. `--summarize-only` rebuilds CSVs.
+Local script checks: `python3 -m unittest discover -s scripts -p 'test_*.py'`.
+
 `experiments/baseline/` exercises the serial oracle, Block-STM adapter, telemetry modes, and isolated runner process. Its Linux formal template remains intentionally invalid until target-host controls are frozen.
 
 `experiments/speculation-window/` freezes `P=8` and compares the distinct effective admission choices `1/P/4P/W`. The anchor matrices contrast expensive low-conflict work with a cheap single-key hotspot chain. Boundary matrices keep the seed, transaction count, compute distribution, workers, and all other controls fixed while changing only `key_space` from 1 through 3. The hotspot/cold-tail matrix keeps `key_space=8192` while concentrating accesses on a small hot head and explicitly controlling read/write correlation.

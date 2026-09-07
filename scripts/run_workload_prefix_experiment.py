@@ -140,8 +140,10 @@ def summarize(stage_dir, suite="placement", describe=describe_synthetic):
             if [r["round"] for r in case_records] != expected:
                 raise ValueError(f"incomplete measurement rounds: {path}")
         description = describe(config, suite, path.stem)
-        reference = by_case["runtime"]
         for case, case_records in by_case.items():
+            policy = case.rsplit("-p", 1)[0] if suite == "workers" else case
+            suffix = case[len(policy):]
+            reference = by_case["runtime" + suffix]
             ratios = [r["timing"]["execution_ns"] / b["timing"]["execution_ns"]
                       for r, b in zip(case_records, reference)]
             ratio, low, high = paired_bootstrap(ratios, description["seed"])
@@ -158,17 +160,33 @@ def summarize(stage_dir, suite="placement", describe=describe_synthetic):
             row["planning_ms"] = med((r["metrics"]["dependency"]["acquisition_ns"] +
                                       r["metrics"]["dependency"]["representation_ns"]) / 1e6
                                      for r in case_records)
+            if suite == "workers":
+                row.update(policy=policy, workers=case_records[0]["case"]["executors"])
+                hardware = case_records[0]["provenance"]["hardware"]
+                row.update(gomaxprocs=hardware["gomaxprocs"], cpu_allowed_list=hardware["cpu_allowed_list"])
+                for key in ("validation_events", "wait_events", "max_rss_bytes"):
+                    row[key] = med(r["metrics"][key] for r in case_records)
+                for key in ("estimate_suspends", "estimate_suspend_ns", "worker_yields", "idle_parks"):
+                    row[key] = med(r["metrics"]["kernel_policy"][key] for r in case_records)
+                row["peak_runnable_workers"] = max(r["metrics"]["kernel_policy"]["peak_runnable_workers"]
+                                                    for r in case_records)
+                row["dependency_wait_ns"] = med(r["metrics"]["dependency"]["wait_ns"] for r in case_records)
+                ratios = [r["timing"]["execution_ns"] / b["timing"]["execution_ns"]
+                          for r, b in zip(case_records, by_case[policy + "-p8"])]
+                row["ratio_to_p8"], row["p8_ci_low"], row["p8_ci_high"] = paired_bootstrap(ratios, description["seed"])
             rows.append(row)
-            if case == "direct-ready":
+            if policy == "direct-ready":
                 direct_times = [r["timing"]["execution_ns"] for r in case_records]
                 for other in ("runtime", "estimate-abort"):
-                    other_times = [r["timing"]["execution_ns"] for r in by_case[other]]
+                    other_times = [r["timing"]["execution_ns"] for r in by_case[other + suffix]]
                     pair = [a / b for a, b in zip(direct_times, other_times)]
                     effect, lower, upper = paired_bootstrap(pair, description["seed"])
                     comparisons.append({"cell": path.stem, "profile": row["profile"],
                                         "seed": description["seed"], "comparison_family": f"direct_vs_{other}",
                                         "ratio": effect, "ci_low": lower, "ci_high": upper,
                                         "p_value": exact_sign_test(other_times, direct_times)})
+                    if suite == "workers":
+                        comparisons[-1]["workers"] = row["workers"]
     holm_adjust(comparisons)
     write_csv(stage_dir / "summary.csv", rows)
     write_csv(stage_dir / "comparisons.csv", comparisons)

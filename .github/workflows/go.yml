@@ -46,6 +46,9 @@ jobs:
       - name: Download modules
         run: go mod download
 
+      - name: Test experiment scripts
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+
       - name: Verify project and frozen substrate
         env:
           GOTOOLCHAIN: local
