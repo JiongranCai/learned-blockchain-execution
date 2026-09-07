@@ -89,10 +89,16 @@ def configurations(base, args, stage_dir):
             name = f"{profile}_c{units}_p{int(prefix * 100)}_s{seed}"
             yield name, matrix(base, profile, units, prefix, seed, stage_dir / name, args.stage, args.notes)
         return
-    profiles = [(h, cold, 1000000) for h, cold in itertools.product((2, 4, 8), (0, 1000000))]
-    profiles.append((4, 1000000, 100000))  # Short-head control with the same transactions.
+    if args.suite == "prefix-scaling":
+        profiles = [(h, 0, 1000000) for h in (2, 4, 8)]
+        costs = [(p, 100000) for p in (0, 400000, 800000, 1600000, 3200000)]
+        seeds = {"pilot": (79,), "repeated": (83, 8383, 838383)}[args.stage]
+    else:
+        profiles = [(h, cold, 1000000) for h, cold in itertools.product((2, 4, 8), (0, 1000000))]
+        profiles.append((4, 1000000, 100000))  # Short-head control with the same transactions.
+        costs, seeds = FOLLOWER_COSTS, CONTENTION_SEEDS[args.stage]
     for (hot_keys, cold, head), (prefix, suffix), seed in itertools.product(
-            profiles, FOLLOWER_COSTS, CONTENTION_SEEDS[args.stage]):
+            profiles, costs, seeds):
         units = prefix + suffix
         name = f"hot{hot_keys}_cold{cold}_head{head}_c{units}_p{prefix}_s{seed}"
         config = matrix(base, "single-hot", units, prefix / units, seed,
@@ -118,7 +124,7 @@ def summarize(stage_dir, suite="placement"):
             if [r["round"] for r in case_records] != expected:
                 raise ValueError(f"incomplete measurement rounds: {path}")
         workload = config["workload"]["synthetic"]
-        subject = workload["mix"][1 if suite == "contention" else 0]
+        subject = workload["mix"][0 if suite == "placement" else 1]
         compute = subject["compute"]
         reference = by_case["runtime"]
         for case, case_records in by_case.items():
@@ -132,7 +138,7 @@ def summarize(stage_dir, suite="placement"):
                    "measurements": len(case_records),
                    "median_ms": med(r["timing"]["execution_ns"] / 1e6 for r in case_records),
                    "ratio_to_runtime": ratio, "ratio_ci_low": low, "ratio_ci_high": high}
-            if suite == "contention":
+            if suite != "placement":
                 prefix = int(compute["max_units"] * compute["prefix_fraction"])
                 row.update(hot_keys=subject["access"]["hot_keys"],
                            cold_fraction=workload["mix"][2]["weight"],
@@ -195,7 +201,7 @@ def run(args, stage_dir):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", type=Path, help="server project results/runs/<run-id>")
-    parser.add_argument("--suite", choices=("placement", "contention"), default="placement")
+    parser.add_argument("--suite", choices=("placement", "contention", "prefix-scaling"), default="placement")
     parser.add_argument("--stage", choices=STAGES, default="pilot")
     parser.add_argument("--notes", default="")
     parser.add_argument("--summarize-only", action="store_true")
