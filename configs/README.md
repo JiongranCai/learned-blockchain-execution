@@ -148,6 +148,15 @@ Smoke matrices may use fewer rounds, but their records remain pilot evidence and
 
 ## Experiment families
 
+`scripts/run_workload_prefix_experiment.py` compares Runtime, Direct-ready, and Estimate-abort at `P=8`, `L=W` across five workload profiles, two compute costs, and prefix fractions `0/0.5/1`. Run it on the Linux server with eight physical cores selected from that host's topology, for example:
+
+```sh
+numactl --physcpubind=2-9 --membind=0 python3 scripts/run_workload_prefix_experiment.py /path/to/results --stage pilot
+numactl --physcpubind=2-9 --membind=0 python3 scripts/run_workload_prefix_experiment.py /path/to/results --stage repeated
+```
+
+The pilot uses one seed and 1/3 warmup/measurement rounds; repeated exploration uses two different seeds and 3/30 rounds. Each stage stores its binary, generated configs, raw records, environment notes, and `summary.csv` under the results directory. Ratios below one favor the candidate over Runtime; the paired bootstrap intervals are descriptive, without multiple-comparison correction. Both stages are exploratory. `--notes` records host conditions; `--summarize-only` regenerates the CSV without execution.
+
 `experiments/baseline/` exercises the serial oracle, Block-STM adapter, telemetry modes, and isolated runner process. Its Linux formal template remains intentionally invalid until target-host controls are frozen.
 
 `experiments/speculation-window/` freezes `P=8` and compares the distinct effective admission choices `1/P/4P/W`. The anchor matrices contrast expensive low-conflict work with a cheap single-key hotspot chain. Boundary matrices keep the seed, transaction count, compute distribution, workers, and all other controls fixed while changing only `key_space` from 1 through 3. The hotspot/cold-tail matrix keeps `key_space=8192` while concentrating accesses on a small hot head and explicitly controlling read/write correlation.
