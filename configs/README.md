@@ -151,11 +151,13 @@ Smoke matrices may use fewer rounds, but their records remain pilot evidence and
 `scripts/run_workload_prefix_experiment.py` compares Runtime, Direct-ready, and Estimate-abort at `P=8`, `L=W` across five workload profiles, two compute costs, and prefix fractions `0/0.5/1`. Run it on the Linux server with eight physical cores selected from that host's topology, for example:
 
 ```sh
-numactl --physcpubind=2-9 --membind=0 python3 scripts/run_workload_prefix_experiment.py /path/to/results --stage pilot
-numactl --physcpubind=2-9 --membind=0 python3 scripts/run_workload_prefix_experiment.py /path/to/results --stage repeated
+numactl --physcpubind=2-9 --membind=0 python3 scripts/run_workload_prefix_experiment.py results/runs/my-run --stage pilot
+numactl --physcpubind=2-9 --membind=0 python3 scripts/run_workload_prefix_experiment.py results/runs/my-run --stage repeated
 ```
 
-The pilot uses one seed and 1/3 warmup/measurement rounds; repeated exploration uses two different seeds and 3/30 rounds. Each stage stores its binary, generated configs, raw records, environment notes, and `summary.csv` under the results directory. Ratios below one favor the candidate over Runtime; the paired bootstrap intervals are descriptive, without multiple-comparison correction. Both stages are exploratory. `--notes` records host conditions; `--summarize-only` regenerates the CSV without execution.
+The pilot uses one seed and 1/3 warmup/measurement rounds; repeated exploration uses two different seeds and 3/30 rounds. Each stage stores its binary, generated configs, raw records, environment notes, and `summary.csv` under the results directory. Ratios below one favor the candidate over Runtime. `comparisons.csv` directly pairs Direct with Runtime and Estimate-abort, with bootstrap intervals and sign-test p-values adjusted by Holm within each comparison family and stage. The intervals themselves are unadjusted. Both stages are exploratory. `--notes` records host conditions; `--summarize-only` regenerates the CSV files without execution.
+
+Add `--suite contention` to test early deferral with heterogeneous computation. The fixed mixture is 5% long-suffix hotspot RMW, 45% follower hotspot RMW, and 50% cold-key read-only work. Roles are sampled rather than assigned to fixed transaction positions; "head" names the long-suffix class, not a guaranteed chain head. Cold keys exclude the hotspot and cannot introduce conflicts. The suite crosses 2/4/8 hot keys with zero/1M cold compute units, holds the long-suffix class at 1M units, and adds a 100k short-head control at 4 hot keys and 1M cold units. Follower `(prefix, suffix)` costs are `(0,100k)`, `(50k,50k)`, `(90k,10k)` for fixed-total placement, and `(0,100k)`, `(100k,100k)`, `(400k,100k)` for fixed-suffix scaling. Changing costs preserves transaction roles, keys, and order within a seed and hotspot width. The pilot uses seed 71; repeated exploration uses seeds 73/7373/737373, yielding 35/105 matrices. Summary cost/prefix columns refer to followers; head and cold costs are recorded separately.
 
 `experiments/baseline/` exercises the serial oracle, Block-STM adapter, telemetry modes, and isolated runner process. Its Linux formal template remains intentionally invalid until target-host controls are frozen.
 

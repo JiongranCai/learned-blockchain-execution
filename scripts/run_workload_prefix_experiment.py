@@ -3,7 +3,6 @@
 
 import argparse
 import copy
-import csv
 import itertools
 import json
 import os
@@ -12,12 +11,16 @@ import random
 import statistics
 import subprocess
 
-from analyze_cq3_ready_queue_experiment import paired_bootstrap
+from analyze_cq3_ready_queue_experiment import exact_sign_test, holm_adjust, paired_bootstrap, write_csv
 
 
 REPO = Path(__file__).resolve().parent.parent
 PROFILES = ("single-hot", "hot8", "uniform-multikey", "zipf-mixed", "selective8")
 STAGES = {"pilot": (1, 3, (42,)), "repeated": (3, 30, (43, 4243))}
+CONTENTION_SEEDS = {"pilot": (71,), "repeated": (73, 7373, 737373)}
+# Follower (prefix, suffix): shared anchor, fixed total, then fixed suffix.
+FOLLOWER_COSTS = ((0, 100000), (50000, 50000), (90000, 10000),
+                  (100000, 100000), (400000, 100000))
 
 
 def mixture(profile, units, prefix):
@@ -62,8 +65,45 @@ def matrix(base, profile, units, prefix, seed, cell, stage, notes):
     return config
 
 
-def summarize(stage_dir):
+def contention_mixture(hot_keys, cold_units, head_units, prefix, suffix):
+    def tx(weight, hot_probability, before, after):
+        total = before + after
+        return {"weight": weight, "template": "rmw", "read_keys": 1, "update_keys": 1,
+                "access": {"kind": "hotspot", "hot_keys": hot_keys,
+                           "hot_probability": hot_probability},
+                "compute": {"min_units": total, "max_units": total,
+                            "prefix_fraction": before / total if total else 0}}
+
+    # Roles are sampled, not assigned to fixed positions. Cold read-only work
+    # cannot add conflicts; changing its cost preserves the access skeleton.
+    mix = [tx(0.05, 1, 0, head_units), tx(0.45, 1, prefix, suffix),
+           tx(0.5, 0, 0, cold_units)]
+    mix[2]["update_keys"] = 0
+    return mix
+
+
+def configurations(base, args, stage_dir):
+    if args.suite == "placement":
+        cells = itertools.product(PROFILES, (1000, 100000), (0, 0.5, 1), STAGES[args.stage][2])
+        for profile, units, prefix, seed in cells:
+            name = f"{profile}_c{units}_p{int(prefix * 100)}_s{seed}"
+            yield name, matrix(base, profile, units, prefix, seed, stage_dir / name, args.stage, args.notes)
+        return
+    profiles = [(h, cold, 1000000) for h, cold in itertools.product((2, 4, 8), (0, 1000000))]
+    profiles.append((4, 1000000, 100000))  # Short-head control with the same transactions.
+    for (hot_keys, cold, head), (prefix, suffix), seed in itertools.product(
+            profiles, FOLLOWER_COSTS, CONTENTION_SEEDS[args.stage]):
+        units = prefix + suffix
+        name = f"hot{hot_keys}_cold{cold}_head{head}_c{units}_p{prefix}_s{seed}"
+        config = matrix(base, "single-hot", units, prefix / units, seed,
+                        stage_dir / name, args.stage, args.notes)
+        config["workload"]["synthetic"]["mix"] = contention_mixture(hot_keys, cold, head, prefix, suffix)
+        yield name, config
+
+
+def summarize(stage_dir, suite="placement"):
     rows = []
+    comparisons = []
     for path in sorted((stage_dir / "configs").glob("*.json")):
         config = json.loads(path.read_text())
         records = [json.loads(line) for line in Path(config["output"]["run_records"]).read_text().splitlines()]
@@ -78,19 +118,27 @@ def summarize(stage_dir):
             if [r["round"] for r in case_records] != expected:
                 raise ValueError(f"incomplete measurement rounds: {path}")
         workload = config["workload"]["synthetic"]
-        compute = workload["mix"][0]["compute"]
+        subject = workload["mix"][1 if suite == "contention" else 0]
+        compute = subject["compute"]
         reference = by_case["runtime"]
         for case, case_records in by_case.items():
             ratios = [r["timing"]["execution_ns"] / b["timing"]["execution_ns"]
                       for r, b in zip(case_records, reference)]
             ratio, low, high = paired_bootstrap(ratios, workload["seed"])
-            med = lambda values: statistics.median(list(values))
-            row = {"cell": path.stem, "profile": path.stem.split("_c")[0],
+            med = statistics.median
+            row = {"cell": path.stem, "profile": path.stem.rsplit("_c", 1)[0],
                    "seed": workload["seed"], "compute_units": compute["max_units"],
                    "prefix_fraction": compute["prefix_fraction"], "case": case,
                    "measurements": len(case_records),
                    "median_ms": med(r["timing"]["execution_ns"] / 1e6 for r in case_records),
                    "ratio_to_runtime": ratio, "ratio_ci_low": low, "ratio_ci_high": high}
+            if suite == "contention":
+                prefix = int(compute["max_units"] * compute["prefix_fraction"])
+                row.update(hot_keys=subject["access"]["hot_keys"],
+                           cold_fraction=workload["mix"][2]["weight"],
+                           cold_units=workload["mix"][2]["compute"]["max_units"],
+                           head_units=workload["mix"][0]["compute"]["max_units"],
+                           prefix_units=prefix, suffix_units=compute["max_units"] - prefix)
             for key in ("execution_attempts", "reexecution_attempts", "discarded_execution_units",
                         "reexecuted_execution_units", "useful_execution_units", "validation_failures"):
                 row[key] = med(r["metrics"][key] for r in case_records)
@@ -100,10 +148,19 @@ def summarize(stage_dir):
                                       r["metrics"]["dependency"]["representation_ns"]) / 1e6
                                      for r in case_records)
             rows.append(row)
-    with (stage_dir / "summary.csv").open("w", newline="") as output:
-        writer = csv.DictWriter(output, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
+            if case == "direct-ready":
+                direct_times = [r["timing"]["execution_ns"] for r in case_records]
+                for other in ("runtime", "estimate-abort"):
+                    other_times = [r["timing"]["execution_ns"] for r in by_case[other]]
+                    pair = [a / b for a, b in zip(direct_times, other_times)]
+                    effect, lower, upper = paired_bootstrap(pair, workload["seed"])
+                    comparisons.append({"cell": path.stem, "profile": row["profile"],
+                                        "seed": workload["seed"], "comparison_family": f"direct_vs_{other}",
+                                        "ratio": effect, "ci_low": lower, "ci_high": upper,
+                                        "p_value": exact_sign_test(other_times, direct_times)})
+    holm_adjust(comparisons)
+    write_csv(stage_dir / "summary.csv", rows)
+    write_csv(stage_dir / "comparisons.csv", comparisons)
     print(f"Summary: {stage_dir / 'summary.csv'}", flush=True)
 
 
@@ -121,32 +178,31 @@ def run(args, stage_dir):
         for command in (["date", "-Is"], ["git", "rev-parse", "HEAD"], ["go", "version"],
                         ["uname", "-a"], ["lscpu"], ["cat", "/proc/mdstat"]):
             subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, check=True)
-    cells = list(itertools.product(PROFILES, (1000, 100000), (0, 0.5, 1), STAGES[args.stage][2]))
+    cells = list(configurations(base, args, stage_dir))
     random.Random(20260907).shuffle(cells)
-    for index, (profile, units, prefix, seed) in enumerate(cells, 1):
-        name = f"{profile}_c{units}_p{int(prefix * 100)}_s{seed}"
+    for index, (name, config) in enumerate(cells, 1):
         cell = stage_dir / name
         cell.mkdir()
-        config = matrix(base, profile, units, prefix, seed, cell, args.stage, args.notes)
         path = stage_dir / "configs" / f"{name}.json"
         path.write_text(json.dumps(config, indent=2) + "\n")
         print(f"[{index}/{len(cells)}] {name}", flush=True)
         with (cell / "run.log").open("w") as log:
             subprocess.run([str(binary), "run", "-config", str(path)], env=env,
                            stdout=log, stderr=subprocess.STDOUT, check=True)
-    summarize(stage_dir)
+    summarize(stage_dir, args.suite)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("run_dir", type=Path, help="separate results directory on the server")
+    parser.add_argument("run_dir", type=Path, help="server project results/runs/<run-id>")
+    parser.add_argument("--suite", choices=("placement", "contention"), default="placement")
     parser.add_argument("--stage", choices=STAGES, default="pilot")
     parser.add_argument("--notes", default="")
     parser.add_argument("--summarize-only", action="store_true")
     args = parser.parse_args()
     stage_dir = args.run_dir.resolve() / args.stage
     if args.summarize_only:
-        summarize(stage_dir)
+        summarize(stage_dir, args.suite)
     else:
         run(args, stage_dir)
 
