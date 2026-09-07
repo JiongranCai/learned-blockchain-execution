@@ -107,7 +107,23 @@ def configurations(base, args, stage_dir):
         yield name, config
 
 
-def summarize(stage_dir, suite="placement"):
+def describe_synthetic(config, suite, name):
+    workload = config["workload"]["synthetic"]
+    subject = workload["mix"][0 if suite == "placement" else 1]
+    compute = subject["compute"]
+    row = {"profile": name.rsplit("_c", 1)[0], "seed": workload["seed"],
+           "compute_units": compute["max_units"], "prefix_fraction": compute["prefix_fraction"]}
+    if suite != "placement":
+        prefix = int(compute["max_units"] * compute["prefix_fraction"])
+        row.update(hot_keys=subject["access"]["hot_keys"],
+                   cold_fraction=workload["mix"][2]["weight"],
+                   cold_units=workload["mix"][2]["compute"]["max_units"],
+                   head_units=workload["mix"][0]["compute"]["max_units"],
+                   prefix_units=prefix, suffix_units=compute["max_units"] - prefix)
+    return row
+
+
+def summarize(stage_dir, suite="placement", describe=describe_synthetic):
     rows = []
     comparisons = []
     for path in sorted((stage_dir / "configs").glob("*.json")):
@@ -123,28 +139,17 @@ def summarize(stage_dir, suite="placement"):
         for case_records in by_case.values():
             if [r["round"] for r in case_records] != expected:
                 raise ValueError(f"incomplete measurement rounds: {path}")
-        workload = config["workload"]["synthetic"]
-        subject = workload["mix"][0 if suite == "placement" else 1]
-        compute = subject["compute"]
+        description = describe(config, suite, path.stem)
         reference = by_case["runtime"]
         for case, case_records in by_case.items():
             ratios = [r["timing"]["execution_ns"] / b["timing"]["execution_ns"]
                       for r, b in zip(case_records, reference)]
-            ratio, low, high = paired_bootstrap(ratios, workload["seed"])
+            ratio, low, high = paired_bootstrap(ratios, description["seed"])
             med = statistics.median
-            row = {"cell": path.stem, "profile": path.stem.rsplit("_c", 1)[0],
-                   "seed": workload["seed"], "compute_units": compute["max_units"],
-                   "prefix_fraction": compute["prefix_fraction"], "case": case,
+            row = {"cell": path.stem, **description, "case": case,
                    "measurements": len(case_records),
                    "median_ms": med(r["timing"]["execution_ns"] / 1e6 for r in case_records),
                    "ratio_to_runtime": ratio, "ratio_ci_low": low, "ratio_ci_high": high}
-            if suite != "placement":
-                prefix = int(compute["max_units"] * compute["prefix_fraction"])
-                row.update(hot_keys=subject["access"]["hot_keys"],
-                           cold_fraction=workload["mix"][2]["weight"],
-                           cold_units=workload["mix"][2]["compute"]["max_units"],
-                           head_units=workload["mix"][0]["compute"]["max_units"],
-                           prefix_units=prefix, suffix_units=compute["max_units"] - prefix)
             for key in ("execution_attempts", "reexecution_attempts", "discarded_execution_units",
                         "reexecuted_execution_units", "useful_execution_units", "validation_failures"):
                 row[key] = med(r["metrics"][key] for r in case_records)
@@ -159,9 +164,9 @@ def summarize(stage_dir, suite="placement"):
                 for other in ("runtime", "estimate-abort"):
                     other_times = [r["timing"]["execution_ns"] for r in by_case[other]]
                     pair = [a / b for a, b in zip(direct_times, other_times)]
-                    effect, lower, upper = paired_bootstrap(pair, workload["seed"])
+                    effect, lower, upper = paired_bootstrap(pair, description["seed"])
                     comparisons.append({"cell": path.stem, "profile": row["profile"],
-                                        "seed": workload["seed"], "comparison_family": f"direct_vs_{other}",
+                                        "seed": description["seed"], "comparison_family": f"direct_vs_{other}",
                                         "ratio": effect, "ci_low": lower, "ci_high": upper,
                                         "p_value": exact_sign_test(other_times, direct_times)})
     holm_adjust(comparisons)
@@ -170,7 +175,7 @@ def summarize(stage_dir, suite="placement"):
     print(f"Summary: {stage_dir / 'summary.csv'}", flush=True)
 
 
-def run(args, stage_dir):
+def run(args, stage_dir, configuration_factory=configurations, describe=describe_synthetic):
     stage_dir.mkdir(parents=True)
     (stage_dir / "configs").mkdir()
     os.chdir(REPO)
@@ -184,7 +189,7 @@ def run(args, stage_dir):
         for command in (["date", "-Is"], ["git", "rev-parse", "HEAD"], ["go", "version"],
                         ["uname", "-a"], ["lscpu"], ["cat", "/proc/mdstat"]):
             subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, check=True)
-    cells = list(configurations(base, args, stage_dir))
+    cells = list(configuration_factory(base, args, stage_dir))
     random.Random(20260907).shuffle(cells)
     for index, (name, config) in enumerate(cells, 1):
         cell = stage_dir / name
@@ -195,7 +200,7 @@ def run(args, stage_dir):
         with (cell / "run.log").open("w") as log:
             subprocess.run([str(binary), "run", "-config", str(path)], env=env,
                            stdout=log, stderr=subprocess.STDOUT, check=True)
-    summarize(stage_dir, args.suite)
+    summarize(stage_dir, args.suite, describe)
 
 
 def main():
