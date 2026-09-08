@@ -80,6 +80,20 @@ class SmallBankExperimentTest(unittest.TestCase):
             self.assertEqual(left[1]["compute"]["max_units"], right[1]["compute"]["max_units"])
             self.assertEqual(left[0]["access"], left[1]["access"])
 
+    def test_prefix_scaling_changes_only_follower_costs(self):
+        cells = {name: (mix, initial) for name, mix, initial in profiles(True)}
+        self.assertEqual(len(cells), 27)
+        for hot in (2, 4, 8):
+            anchor = cells[f"contention-hot{hot}-p0-s100000"]
+            for prefix in (400000, 800000, 1600000, 3200000):
+                for p, s in ((prefix, 100000), (0, prefix + 100000)):
+                    candidate = copy.deepcopy(cells[f"contention-hot{hot}-p{p}-s{s}"])
+                    cost = candidate[0][1]["compute"]
+                    self.assertEqual(cost["min_units"], prefix + 100000)
+                    self.assertEqual(int(cost["max_units"] * cost["prefix_fraction"]), p)
+                    candidate[0][1]["compute"] = anchor[0][1]["compute"]
+                    self.assertEqual(candidate, anchor)
+
 
 if __name__ == "__main__":
     unittest.main()

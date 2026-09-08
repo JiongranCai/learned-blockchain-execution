@@ -253,6 +253,14 @@ advantages, not a claim that either policy wins. The original synthetic selectiv
 and HDU diagnostics remain available. Finite L is supported by the same SmallBank
 inputs, but this first suite holds L fixed to isolate CQ3.
 
+`--prefix-scaling` selects a separate contention suite: hot sets 2/4/8 and
+follower prefix 0/400k/800k/1.6M/3.2M with suffix fixed at 100k. It also provides
+equal-total controls with all follower compute after the read (27 profiles total).
+The 5% slow writers and 50% cold Balance work retain the costs above. Use
+`--profiles contention-hot8-p800000-s100000 contention-hot8-p0-s900000`, for
+example, to compare the same 900k follower cost before/after the read. The default
+22-profile suite is unchanged. Select fresh seeds explicitly for follow-up runs.
+
 The original suite had 16 profiles; the two low-compute and four sparse-selective
 profiles were added after its first server results. Saved configs identify the
 exact selection used by each experiment. `--seeds N ...` supplies fresh seeds for

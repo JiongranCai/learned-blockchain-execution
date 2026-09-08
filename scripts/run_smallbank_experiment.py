@@ -28,7 +28,22 @@ def hotspot(hot, probability=1):
     return {"kind": "hotspot", "hot_accounts": hot, "hot_probability": probability}
 
 
-def profiles():
+def contention_profiles(hot_sets, costs):
+    for hot, (prefix, suffix) in itertools.product(hot_sets, costs):
+        mix = [transaction("deposit_checking", 5, hotspot(hot), 0, 1000000),
+               transaction("deposit_checking", 45, hotspot(hot), prefix, suffix),
+               transaction("balance", 50, hotspot(hot, 0), 0, 100000)]
+        yield f"contention-hot{hot}-p{prefix}-s{suffix}", mix, {"min": 1000000, "max": 1000000}
+
+
+def profiles(prefix_scaling=False):
+    if prefix_scaling:
+        prefixes = (0, 400000, 800000, 1600000, 3200000)
+        costs = [(p, 100000) for p in prefixes]
+        # Equal-total controls distinguish cost placement from adding work.
+        costs += [(0, p + 100000) for p in prefixes if p]
+        yield from contention_profiles((2, 4, 8), costs)
+        return
     # Full six-transaction reference mix, fixed total work, varying placement.
     for name, access in (("uniform", {"kind": "uniform"}), ("hot8", hotspot(8, 0.95))):
         for prefix in (0, 90000):
@@ -44,11 +59,7 @@ def profiles():
 
     # A single-account banking subset isolates the earlier costly-prefix
     # mechanism. Roles are independently sampled; no forced predecessor order.
-    for hot, (prefix, suffix) in itertools.product((2, 8), ((0, 100000), (90000, 10000), (400000, 100000))):
-        mix = [transaction("deposit_checking", 5, hotspot(hot), 0, 1000000),
-               transaction("deposit_checking", 45, hotspot(hot), prefix, suffix),
-               transaction("balance", 50, hotspot(hot, 0), 0, 100000)]
-        yield f"contention-hot{hot}-p{prefix}-s{suffix}", mix, {"min": 1000000, "max": 1000000}
+    yield from contention_profiles((2, 8), ((0, 100000), (90000, 10000), (400000, 100000)))
 
     # Checking is never modified here. Savings writers create potential false
     # predecessors; thresholds produce skip/all/mixed reads without tx failure.
@@ -67,7 +78,7 @@ def profiles():
 
 def configurations(base, args, stage_dir):
     seeds = getattr(args, "seeds", None) or SEEDS[args.stage]
-    for (profile, mix, checking), seed in itertools.product(profiles(), seeds):
+    for (profile, mix, checking), seed in itertools.product(profiles(getattr(args, "prefix_scaling", False)), seeds):
         if getattr(args, "profiles", None) and profile not in args.profiles:
             continue
         name = f"{profile}_s{seed}"
@@ -96,7 +107,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", type=Path, help="server repository results/runs/<run-id>")
     parser.add_argument("--stage", choices=SEEDS, default="pilot")
-    parser.add_argument("--profiles", nargs="+", choices=[name for name, _, _ in profiles()],
+    parser.add_argument("--prefix-scaling", action="store_true",
+                        help="use 2/4/8-hot prefix scans and equal-total suffix controls")
+    parser.add_argument("--profiles", nargs="+",
                         help="run only these workload profiles")
     parser.add_argument("--seeds", nargs="+", type=int, help="override workload seeds for a separate experiment stage")
     parser.add_argument("--block-count", type=int, default=4)
@@ -107,6 +120,9 @@ def main():
     parser.add_argument("--notes", default="")
     parser.add_argument("--summarize-only", action="store_true")
     args = parser.parse_args()
+    available = {name for name, _, _ in profiles(args.prefix_scaling)}
+    if args.profiles and not set(args.profiles) <= available:
+        parser.error("unknown profile for the selected suite")
     if args.measurement_rounds is not None and args.measurement_rounds < 1:
         parser.error("--measurement-rounds must be positive")
     args.suite = "smallbank"
