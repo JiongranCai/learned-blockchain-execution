@@ -36,6 +36,12 @@ def profiles():
                 transaction(kind, weight, access, prefix, 100000-prefix)
                 for kind, weight in STANDARD], {"min": 1000000, "max": 1000000}
 
+    # Low-compute controls expose the cost of acquiring unused information.
+    yield "standard-uniform-cheap", [
+        transaction(kind, weight, {"kind": "uniform"}, suffix=1000)
+        for kind, weight in STANDARD], {"min": 1000000, "max": 1000000}
+    yield "readonly-uniform-cheap", [transaction("balance", 1, {"kind": "uniform"}, suffix=1000)], {"min": 1000000, "max": 1000000}
+
     # A single-account banking subset isolates the earlier costly-prefix
     # mechanism. Roles are independently sampled; no forced predecessor order.
     for hot, (prefix, suffix) in itertools.product((2, 8), ((0, 100000), (90000, 10000), (400000, 100000))):
@@ -51,9 +57,17 @@ def profiles():
                transaction("check_funds", 75, hotspot(8), prefix, 100000-prefix, amount)]
         yield f"selective-a{amount}-p{prefix}", mix, {"min": 100, "max": 199}
 
+    # Sparse slow writers leave CPU capacity for independent conditional reads.
+    # The amount alone switches Savings reads on/off; all CPU costs stay fixed.
+    for hot, amount in itertools.product((1, 2), (50, 200)):
+        mix = [transaction("transact_savings", 5, hotspot(hot), 0, 5000000),
+               transaction("check_funds", 95, hotspot(hot), 450000, 50000, amount)]
+        yield f"selective-sparse-hot{hot}-a{amount}", mix, {"min": 100, "max": 199}
+
 
 def configurations(base, args, stage_dir):
-    for (profile, mix, checking), seed in itertools.product(profiles(), SEEDS[args.stage]):
+    seeds = getattr(args, "seeds", None) or SEEDS[args.stage]
+    for (profile, mix, checking), seed in itertools.product(profiles(), seeds):
         if getattr(args, "profiles", None) and profile not in args.profiles:
             continue
         name = f"{profile}_s{seed}"
@@ -83,6 +97,7 @@ def main():
     parser.add_argument("--stage", choices=SEEDS, default="pilot")
     parser.add_argument("--profiles", nargs="+", choices=[name for name, _, _ in profiles()],
                         help="run only these workload profiles")
+    parser.add_argument("--seeds", nargs="+", type=int, help="override workload seeds for a separate experiment stage")
     parser.add_argument("--measurement-rounds", type=int,
                         help="override measurements per case; choose before starting this stage")
     parser.add_argument("--notes", default="")

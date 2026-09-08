@@ -243,13 +243,20 @@ the next run. Per-block timing remains in the raw records.
 | Standard (4 profiles) | Six-type weights 15/15/15/25/15/15 in table order above; uniform or 95% hot-8 access, 100k configured units with 0% or 90% prefix. Initial Checking/Savings = 1M. |
 | Contention (6 profiles) | 5% hot DepositChecking with 1M suffix, 45% hot DepositChecking followers, 50% cold Balance with 100k suffix. Hot set 2 or 8; follower `(prefix,suffix)` = `(0,100k)`, `(90k,10k)`, `(400k,100k)`. Compare fixed-total placement and fixed-suffix scaling. Roles are sampled, without forced predecessor order. |
 | Selective (6 profiles) | 25% hot TransactSavings (+1, 1M suffix), 75% hot CheckFunds (100k total, 0%/90% prefix), hot set 8. Checking stays in its initial range 100–199; Savings starts at 1M. Thresholds 50/150/200 give skip/mixed/read Savings paths. The mixed rate depends on sampled balances; neither return value nor business failure is varied here. |
+| Low compute (2 profiles) | Uniform six-type mixture or read-only Balance, 1k suffix and no prefix. These isolate guidance overhead under low/no contention. |
+| Sparse selective (4 profiles) | 5% TransactSavings (+1, 5M suffix), 95% CheckFunds (450k prefix + 50k suffix), hot set 1 or 2. Amount 50/200 switches Savings reads off/on at identical costs. Initial balances match the selective profiles. |
 
-Pilot uses seed 131 and 1/3 warmup/measurement rounds (16 matrices). Repeated
-exploration uses seeds 137/13737/1373737 and 3/30 rounds (48 matrices). All costs
+Pilot uses seed 131 and 1/3 warmup/measurement rounds (22 matrices). Repeated
+exploration uses seeds 137/13737/1373737 and 3/30 rounds (66 matrices). All costs
 are CPU units, not durations. These profiles are starting points for finding
 advantages, not a claim that either policy wins. The original synthetic selective
 and HDU diagnostics remain available. Finite L is supported by the same SmallBank
 inputs, but this first suite holds L fixed to isolate CQ3.
+
+The original suite had 16 profiles; the two low-compute and four sparse-selective
+profiles were added after its first server results. Saved configs identify the
+exact selection used by each experiment. `--seeds N ...` supplies fresh seeds for
+a separate follow-up stage.
 
 `--profiles NAME ...` selects a subset for confirmation; `--measurement-rounds N`
 overrides the number of measurements per case. Choose profiles and a fixed count
