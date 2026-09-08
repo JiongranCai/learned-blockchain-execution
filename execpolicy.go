@@ -93,9 +93,6 @@ var (
 	ErrKernelPolicyUnknown = errors.New("unknown kernel execution policy value")
 	// ErrKernelPolicyGate reports missing or malformed ready-queue inputs.
 	ErrKernelPolicyGate = errors.New("invalid ready-queue dispatch gate")
-	// ErrKernelPolicyInflight reports the unimplemented combination of a
-	// finite speculation window with a non-default kernel policy.
-	ErrKernelPolicyInflight = errors.New("kernel execution policy does not support a finite speculation window")
 )
 
 // KernelPolicy configures the additive execution path. The zero value means
@@ -222,13 +219,6 @@ func ExecuteBlockWithKernelPolicy(
 		)
 		return stats, KernelPolicyStats{}, err
 	}
-	if maxInflight > 0 && maxInflight < blockSize {
-		// The admission limiter keeps its own stable-frontier bookkeeping in
-		// speculation.go. Composing it with policy dispatch needs its own
-		// correctness argument, so the combination is refused rather than
-		// silently approximated.
-		return SpeculationStats{}, KernelPolicyStats{}, ErrKernelPolicyInflight
-	}
 	if executors == 0 {
 		executors = maxParallelism()
 	}
@@ -237,6 +227,9 @@ func ExecuteBlockWithKernelPolicy(
 	}
 
 	scheduler := newPolicyScheduler(blockSize, normalized)
+	if maxInflight > 0 && maxInflight < blockSize {
+		scheduler.admission = newAdmissionWindow(blockSize, maxInflight)
+	}
 	mvMemory := NewMVMemoryWithEstimates(blockSize, stores, storage, scheduler.base, estimates)
 	pool := newWorkerPool(executors, blockSize)
 
@@ -262,7 +255,7 @@ func ExecuteBlockWithKernelPolicy(
 		return SpeculationStats{}, stats, errors.New("policy scheduler did not complete")
 	}
 	mvMemory.WriteSnapshot(storage)
-	return SpeculationStats{EffectiveLimit: uint64(blockSize)}, stats, nil
+	return scheduler.speculationStats(), stats, nil
 }
 
 func (p KernelPolicy) validateGate(blockSize int) error {

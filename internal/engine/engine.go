@@ -66,25 +66,18 @@ func (p KernelPlan) IsFrozenDefault() bool {
 }
 
 // EffectiveKernelControl resolves and validates the kernel policy. Ready-queue
-// dispatch needs a wait consumer to describe which transactions are not ready,
-// and it cannot be combined with a finite speculation window because the
-// admission limiter keeps separate stable-frontier bookkeeping.
+// dispatch needs a wait consumer to describe which transactions are not ready.
+// Defaults do not depend on the speculation window.
 func EffectiveKernelControl(config RunConfig, dependency DependencyPlan) (KernelPlan, error) {
 	// An omitted field resolves to the behaviour that matches what a dependency
 	// DAG actually describes: do not dispatch a transaction that is not ready,
-	// and free the worker of a transaction that cannot proceed. Where that
-	// behaviour is unavailable the omitted field falls back to the frozen
-	// upstream value and the resolved plan is recorded. An explicit field is
-	// never downgraded; an illegal explicit combination is refused.
-	finiteWindow := config.MaxSpeculativeInflight > 0
+	// and free the worker of a transaction that cannot proceed. Explicit
+	// fields are never downgraded.
 	waitConsumer := dependency.WaitPolicy != control.DependencyWaitNone
 
 	estimateRead := config.EstimateReadPolicy
 	if estimateRead == "" {
 		estimateRead = control.EstimateReadAbortReschedule
-		if finiteWindow {
-			estimateRead = control.EstimateReadSuspendInPlace
-		}
 	}
 	if !control.ValidEstimateReadPolicy(estimateRead) {
 		return KernelPlan{}, fmt.Errorf("%w: unknown estimate read policy %q", ErrInvalidKernelPolicy, estimateRead)
@@ -93,7 +86,7 @@ func EffectiveKernelControl(config RunConfig, dependency DependencyPlan) (Kernel
 	dispatch := config.DependencyDispatch
 	if dispatch == "" {
 		dispatch = control.DependencyDispatchIndexOrder
-		if waitConsumer && !finiteWindow {
+		if waitConsumer {
 			dispatch = control.DependencyDispatchReadyQueue
 		}
 	}
@@ -107,9 +100,6 @@ func EffectiveKernelControl(config RunConfig, dependency DependencyPlan) (Kernel
 	idleWait := config.IdleWaitPolicy
 	if idleWait == "" {
 		idleWait = control.IdleWaitPark
-		if finiteWindow && estimateRead != control.EstimateReadSuspendYieldWorker {
-			idleWait = control.IdleWaitGosched
-		}
 	}
 	if !control.ValidIdleWaitPolicy(idleWait) {
 		return KernelPlan{}, fmt.Errorf("%w: unknown idle wait policy %q", ErrInvalidKernelPolicy, idleWait)
@@ -120,11 +110,7 @@ func EffectiveKernelControl(config RunConfig, dependency DependencyPlan) (Kernel
 		return KernelPlan{}, fmt.Errorf("%w: suspend_yield_worker requires idle_wait=park", ErrInvalidKernelPolicy)
 	}
 
-	plan := KernelPlan{EstimateRead: estimateRead, IdleWait: idleWait, Dispatch: dispatch}
-	if !plan.IsFrozenDefault() && finiteWindow {
-		return KernelPlan{}, fmt.Errorf("%w: a finite speculation window is unavailable under a non-default kernel policy", ErrInvalidKernelPolicy)
-	}
-	return plan, nil
+	return KernelPlan{EstimateRead: estimateRead, IdleWait: idleWait, Dispatch: dispatch}, nil
 }
 
 type DependencyPlan struct {

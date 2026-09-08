@@ -24,6 +24,8 @@ type policyScheduler struct {
 
 	mu   sync.Mutex
 	wake chan struct{}
+	// nil keeps the existing full-window path and its telemetry semantics.
+	admission *admissionWindow
 
 	// ready holds transactions that must be re-dispatched outside the
 	// monotonic execution_idx scan: gate-deferred transactions whose
@@ -234,6 +236,8 @@ func (s *policyScheduler) scanWork() (validate, execute bool) {
 // runtime baseline against 2.93x for this order.
 func (s *policyScheduler) nextTask() (TxnVersion, TaskKind) {
 	if txn, ok := s.popReady(); ok {
+		// These transactions were already admitted. Their index remains in
+		// the window across deferral/abort, so no new slot is acquired here.
 		if incarnation, started := s.base.txn_status[txn].TrySetExecuting(); started {
 			s.readyDispatches.Add(1)
 			return TxnVersion{txn, incarnation}, TaskKindExecution
@@ -250,6 +254,17 @@ func (s *policyScheduler) nextTask() (TxnVersion, TaskKind) {
 }
 
 func (s *policyScheduler) nextVersionToValidate() TxnVersion {
+	if s.admission != nil {
+		// Serialize the scan with new-write-path invalidation, as in the
+		// legacy admission scheduler.
+		s.mu.Lock()
+		version := s.base.NextVersionToValidate()
+		s.mu.Unlock()
+		if s.base.Done() {
+			s.notify()
+		}
+		return version
+	}
 	if s.base.validation_idx.Load() >= uint64(s.base.block_size) {
 		s.checkDone()
 		return InvalidTxnVersion
@@ -270,8 +285,21 @@ func (s *policyScheduler) nextVersionToExecute() TxnVersion {
 		s.checkDone()
 		return InvalidTxnVersion
 	}
-	IncrAtomic(&s.base.num_active_tasks)
-	idx := TxnIndex(s.base.execution_idx.Add(1) - 1)
+	var idx TxnIndex
+	if s.admission != nil {
+		s.mu.Lock()
+		next := int(s.base.execution_idx.Load())
+		if next >= s.base.block_size || !s.admission.admit(next) {
+			s.mu.Unlock()
+			return InvalidTxnVersion
+		}
+		IncrAtomic(&s.base.num_active_tasks)
+		idx = TxnIndex(s.base.execution_idx.Add(1) - 1)
+		s.mu.Unlock()
+	} else {
+		IncrAtomic(&s.base.num_active_tasks)
+		idx = TxnIndex(s.base.execution_idx.Add(1) - 1)
+	}
 	if int(idx) >= s.base.block_size {
 		DecrAtomic(&s.base.num_active_tasks)
 		return InvalidTxnVersion
@@ -294,14 +322,48 @@ func (s *policyScheduler) nextVersionToExecute() TxnVersion {
 }
 
 func (s *policyScheduler) finishExecution(version TxnVersion, wroteNewPath bool) (TxnVersion, TaskKind) {
+	if s.admission != nil {
+		s.mu.Lock()
+		if wroteNewPath && s.base.validation_idx.Load() > uint64(version.Index) {
+			s.admission.invalidateFrom(int(version.Index), int(s.base.execution_idx.Load()))
+		}
+	}
 	next, kind := s.base.FinishExecution(version, wroteNewPath)
+	if s.admission != nil {
+		s.mu.Unlock()
+	}
 	s.completeExecution(version.Index)
 	return next, kind
 }
 
-func (s *policyScheduler) finishValidation(txn TxnIndex, aborted bool) (TxnVersion, TaskKind) {
-	next, kind := s.base.FinishValidation(txn, aborted)
-	s.notify()
+func (s *policyScheduler) validationToken(txn TxnIndex) uint64 {
+	if s.admission == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.admission.epoch[txn]
+}
+
+func (s *policyScheduler) finishValidation(version TxnVersion, valid, aborted bool, token uint64) (TxnVersion, TaskKind) {
+	if s.admission == nil {
+		next, kind := s.base.FinishValidation(version.Index, aborted)
+		s.notify()
+		return next, kind
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if aborted {
+		s.admission.invalidateFrom(int(version.Index), int(s.base.execution_idx.Load()))
+	}
+	next, kind := s.base.FinishValidation(version.Index, aborted)
+	if valid && !aborted {
+		executed, incarnation := s.base.txn_status[version.Index].IsExecuted()
+		if executed && incarnation == version.Incarnation {
+			s.admission.pass(version.Index, token)
+		}
+	}
+	s.notifyLocked()
 	return next, kind
 }
 
@@ -314,7 +376,7 @@ func (s *policyScheduler) finishValidation(txn TxnIndex, aborted bool) (TxnVersi
 // safety interval remains only as a backstop for frozen kernel paths that
 // change state without a notification this extension can hook.
 func (s *policyScheduler) idleWait(ctx context.Context) {
-	if s.policy.IdleWait == IdleWaitGosched {
+	if s.policy.IdleWait == IdleWaitGosched && s.admission == nil {
 		runtime.Gosched()
 		return
 	}
@@ -327,6 +389,8 @@ func (s *policyScheduler) idleWait(ctx context.Context) {
 	// validation work may still be dispatchable; scanning on is the progress
 	// path and must not be delayed by a park.
 	validate, execute := s.scanWork()
+	windowBlocked := execute && s.admission != nil && !s.admission.allows(int(s.base.execution_idx.Load()))
+	execute = execute && !windowBlocked
 	if validate || execute || len(s.ready) > 0 {
 		s.mu.Unlock()
 		runtime.Gosched()
@@ -334,6 +398,14 @@ func (s *policyScheduler) idleWait(ctx context.Context) {
 	}
 	wake := s.wake
 	s.mu.Unlock()
+	if windowBlocked {
+		started := time.Now()
+		defer func() { s.admission.recordStall(time.Since(started)) }()
+	}
+	if s.policy.IdleWait == IdleWaitGosched {
+		runtime.Gosched()
+		return
+	}
 	s.idleParks.Add(1)
 	timer := time.NewTimer(idleParkSafetyInterval)
 	defer timer.Stop()
@@ -342,6 +414,15 @@ func (s *policyScheduler) idleWait(ctx context.Context) {
 	case <-wake:
 	case <-timer.C:
 	}
+}
+
+func (s *policyScheduler) speculationStats() SpeculationStats {
+	if s.admission == nil {
+		return SpeculationStats{EffectiveLimit: uint64(s.base.block_size)}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.admission.stats()
 }
 
 func (s *policyScheduler) stats(pool *workerPool) KernelPolicyStats {

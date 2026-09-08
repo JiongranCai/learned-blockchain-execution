@@ -4,7 +4,9 @@
 
 ## Execution controls
 
-`max_speculative_inflight` is the static admission budget. Zero selects the original full-block window `W`; a positive value is reduced to `min(L,W)` for each block. The worker count remains fixed while `L` changes. A transaction occupies one slot until it enters the continuous stable validated frontier, including suspension and every incarnation; reexecution does not acquire another slot.
+`max_speculative_inflight` is the static admission budget. Zero selects the full-block window `W`; a positive value is reduced to `min(L,W)` for each block. The worker count remains fixed while `L` changes. A transaction occupies one slot until it enters the continuous stable validated frontier, including dependency deferral, suspension and every incarnation; reexecution does not acquire another slot. The policy kernel supports finite windows: only first admission is bounded, while validation and re-dispatch of admitted transactions can proceed. Out-of-order validation does not release a slot until the preceding transactions are stable. Static acquisition and representation construction still cover the whole block, so their scope does not change with L.
+
+Finite-window telemetry records effective L, peak admitted positions beyond the stable prefix, and worker admission-stall events/time. This occupancy includes pending and validating transactions; it is not a count of running workers. `L=0` and `L>=W` use the existing full-window path, where exact occupancy/stall telemetry is unavailable.
 
 ## Synthetic workloads
 
@@ -84,9 +86,9 @@ copy. Input generation remains outside the measured execution interval.
 [standard-smoke.json](experiments/workload/standard-smoke.json) mixes a cheap hot
 RMW, a more expensive multi-key RMW, and a selector workload. It fixes `P=8`,
 `L=W`, and compares runtime, Direct-ready and estimate-abort. Locally use
-`bench validate`; run performance measurements on the server. The full-window
+`bench validate`; run performance measurements on the server. The
 unit tests also cover single/multi-key, read-only, selector, fan-out and mixed
-workloads at prefix fractions 0, 0.5 and 1.
+workloads at prefix fractions 0, 0.5 and 1, with `L=1/8/32/W` and `L>W`.
 
 The design follows [transactional YCSB in Aria](https://github.com/luyi0619/aria/blob/master/benchmark/ycsb/Query.h),
 [YCSB access distributions](https://github.com/brianfrankcooper/YCSB/wiki/Core-Properties),
@@ -114,11 +116,11 @@ CQ3-R telemetry records representation kind and builder, build time and determin
 
 CQ3-U telemetry records the resolved wait and estimate consumers, gate lookups/traversal/resolution, actual waits, estimate build/payload, and remaining reexecution work. A wait-only case must have zero estimate payload; an estimates-only case must have zero plan lookups and dependency waits.
 
-The three kernel policies change only when work happens, never what a block commits. All three fields are optional. An omitted field resolves to the non-blocking behaviour when it is available — `abort_and_reschedule`, `park`, and `ready_queue` for a plan that has a wait consumer — and falls back to the frozen upstream value when it is not. An explicit field is never downgraded: an explicit non-frozen policy with a finite `max_speculative_inflight` is refused, because the admission limiter keeps separate stable-frontier bookkeeping; an explicit `ready_queue` without a wait consumer is refused because there is nothing to gate on; and an explicit `suspend_yield_worker` with `idle_wait_policy=gosched` is refused because a freed worker that spins consumes the capacity that policy exists to release. Omitting `idle_wait_policy` under `suspend_yield_worker` resolves it to `park`. The resolved plan is written back into the case, so every run record names the behaviour that actually executed. A case that resolves to the frozen triple routes through the untouched upstream entry point and reports `kernel_policy.applied=false` with zero policy counters. Range reads keep frozen suspend-in-place semantics, so the non-default estimate policies are unavailable to iterating transactions; the deterministic flat runtime never iterates.
+The three kernel policies change only when work happens, never what a block commits. All three fields are optional. Omitted fields resolve to `abort_and_reschedule`, `park`, and `ready_queue` for a plan with a wait consumer (`index_order` otherwise), independently of L. An explicit field is never downgraded. An explicit `ready_queue` without a wait consumer is refused because there is nothing to gate on; `suspend_yield_worker` with explicit `idle_wait_policy=gosched` is also refused. The resolved plan is written back into the case, so every run record names the behaviour that actually executed. The explicit frozen triple retains the legacy path: the original upstream entry point at `L=W`, or the legacy admission scheduler at finite L, with `kernel_policy.applied=false`. Range reads keep frozen suspend-in-place semantics, so the non-default estimate policies are unavailable to iterating transactions; the deterministic flat runtime never iterates.
 
 Kernel policy telemetry reports what a run actually did: `estimate_suspends` / `estimate_suspend_ns`, `estimate_aborts`, `dispatch_deferrals`, `ready_queue_dispatches`, `worker_yields`, `idle_parks`, and `peak_runnable_workers`. An attempt discarded by `abort_and_reschedule` is charged the work it consumed and is reported as a replay with reason `estimate_dependency_abort`, not as a validation failure, so `validation_failures` stays specific to validation. `peak_runnable_workers` bounds how far `suspend_yield_worker` exceeded the configured executor count while replacing parked workers; a run whose peak is far above the executor count is comparing two things at once and should be read with that in mind.
 
-Because a finite window falls back to the frozen kernel while a full window does not, a matrix that mixes finite and full `max_speculative_inflight` values now varies two things at once. Every CQ2 matrix under `experiments/speculation-window/` and the `speculation-interaction` matrix are in this state and must be re-run — either with the kernel policy pinned explicitly across all arms, or after the policy scheduler supports a finite window. Their existing records remain valid for the frozen kernel they were produced under.
+Historical CQ2 records remain evidence for their recorded Git revisions and kernel policies. Older configurations with omitted kernel fields previously fell back to the frozen kernel at finite L; on the current revision they resolve to the same defaults at every L. Use the recorded revision to reproduce those results, and run the new combined matrix for current CQ2 × CQ3 comparisons. Serial cases explicitly select the frozen triple.
 
 Static program accesses are conservative syntactic sets. The current flat runtime gives complete coverage of every named state access, but branches, failures, gas exhaustion, or state errors can make the executed set smaller. Extra keys can delay work, while missing guidance is repaired by Block-STM validation and deterministic reexecution.
 
@@ -160,6 +162,22 @@ The pilot uses one seed and 1/3 warmup/measurement rounds; repeated exploration 
 Add `--suite contention` to test early deferral with heterogeneous computation. The fixed mixture is 5% long-suffix hotspot RMW, 45% follower hotspot RMW, and 50% cold-key read-only work. Roles are sampled rather than assigned to fixed transaction positions; "head" names the long-suffix class, not a guaranteed chain head. Cold keys exclude the hotspot and cannot introduce conflicts. The suite crosses 2/4/8 hot keys with zero/1M cold compute units, holds the long-suffix class at 1M units, and adds a 100k short-head control at 4 hot keys and 1M cold units. Follower `(prefix, suffix)` costs are `(0,100k)`, `(50k,50k)`, `(90k,10k)` for fixed-total placement, and `(0,100k)`, `(100k,100k)`, `(400k,100k)` for fixed-suffix scaling. Changing costs preserves transaction roles, keys, and order within a seed and hotspot width. The pilot uses seed 71; repeated exploration uses seeds 73/7373/737373, yielding 35/105 matrices. Summary cost/prefix columns refer to followers; head and cold costs are recorded separately.
 
 `--suite prefix-scaling` keeps that mixture at 2/4/8 hot keys, zero cold compute, and a 1M long-suffix class. It fixes follower suffix at 100k and scans prefix 0/400k/800k/1.6M/3.2M. Pilot seed 79 and repeated seeds 83/8383/838383 give 15/45 matrices, using the same 1/3 and 3/30 rounds.
+
+`--suite speculation` fixes `P=8` and `GOMAXPROCS=8`, and crosses
+`L=1/8/32/W` with Runtime, Direct-ready and Estimate-abort (12 cases per matrix).
+Only L changes within each policy. The three input profiles are uniform multi-key
+RMW (65,536 keys), a 99% single-key hotspot, and a Zipf mixture of single-key RMW,
+multi-key RMW and read-only transactions (the latter two profiles use 1,024 keys).
+Each matrix shares one 1,536-transaction block, 100k compute units per transaction
+and a 0.5 prefix fraction across all cases. Pilot/repeated use the existing seeds
+and round counts, producing 3/6 matrices. Ratios pair policies at the same L;
+`ratio_to_lw` pairs the same policy against its full-window case. Full-window
+occupancy/stall fields are blank in summaries because that telemetry is unavailable.
+Run on the server after the experiment host and binding have been selected:
+
+```sh
+numactl --physcpubind=2-9 --membind=0 python3 scripts/run_workload_prefix_experiment.py results/runs/my-window-run --suite speculation --stage pilot
+```
 
 `scripts/run_hdu_experiment.py RUN_DIR --units-per-ms N --stage pilot|repeated` generates explicit, single-block artifacts with 1/8/32/128 independent motifs. Each motif contains four H (10 ms computation, write its own dependency key), four D (8 ms prefix, read the corresponding H key, 1 ms suffix, write a separate key), and four U (20 ms independent computation). HDU and HUD orders preserve transaction programs and keys; there are no group barriers. Costs are fixed CPU work, not sleeps. Calibrate N on the bound experiment CPUs with `GOMAXPROCS=8 go run scripts/hdu_timeline.go -calibrate`. Pilot covers eight fixed-cost matrices; repeated runs those anchors plus ±10% independent cost jitter at 1/128 motifs with seeds 107/10707/1070707 (20 matrices total). Fixed-cost repetitions use one input, not nominally different workload seeds. The existing 1/3 and 3/30 runner and paired analysis apply. `go run scripts/hdu_timeline.go -config MATRIX -case CASE` records separate diagnostic start/read/end/replay timestamps; diagnostic runs do not enter performance summaries.
 

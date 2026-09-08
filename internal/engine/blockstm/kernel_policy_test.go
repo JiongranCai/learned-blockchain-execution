@@ -150,6 +150,13 @@ func assertMatchesSerialOracle(t *testing.T, artifact workload.Artifact, config 
 			t.Fatalf("canonical result mismatch\nwant=%#v\ngot=%#v", want, got)
 		}
 		assertKernelPolicyTelemetry(t, config, trace)
+		limited := config.MaxSpeculativeInflight > 0 && config.MaxSpeculativeInflight < len(block.Transactions)
+		if trace.Work.SpeculationLimitApplied != limited || trace.Work.SpeculationTelemetryAvailable != limited {
+			t.Fatalf("wrong window telemetry for L=%d: %#v", config.MaxSpeculativeInflight, trace.Work)
+		}
+		if limited && (trace.Work.PeakSpeculativeInflight == 0 || trace.Work.PeakSpeculativeInflight > uint64(config.MaxSpeculativeInflight)) {
+			t.Fatalf("window exceeded: L=%d, peak=%d", config.MaxSpeculativeInflight, trace.Work.PeakSpeculativeInflight)
+		}
 	}
 	if !reflect.DeepEqual(serialState.Snapshot(), candidateState.Snapshot()) {
 		t.Fatal("published state mismatch")
@@ -203,14 +210,6 @@ func TestKernelPolicyRejectsUnsupportedCombinations(t *testing.T) {
 	config.DependencyDispatch = control.DependencyDispatchReadyQueue
 	if _, err := engineapi.EffectiveKernelControl(config, plan); !errors.Is(err, engineapi.ErrInvalidKernelPolicy) {
 		t.Fatalf("expected ready_queue without wait consumer to be rejected, got %v", err)
-	}
-
-	// A finite speculation window is not composed with a policy kernel.
-	config = base
-	config.IdleWaitPolicy = control.IdleWaitPark
-	config.MaxSpeculativeInflight = 3
-	if _, err := engineapi.EffectiveKernelControl(config, plan); !errors.Is(err, engineapi.ErrInvalidKernelPolicy) {
-		t.Fatalf("expected finite speculation window to be rejected, got %v", err)
 	}
 
 	// Unknown values are rejected rather than silently defaulted.
@@ -269,21 +268,21 @@ func TestKernelPolicyRejectsUnsupportedCombinations(t *testing.T) {
 		t.Fatalf("omitted dispatch with a wait consumer must resolve to a ready queue, got %#v", resolved)
 	}
 
-	// A finite speculation window has no policy scheduler, so an omitted policy
-	// falls back to the frozen upstream kernel rather than failing.
-	windowed := base
-	windowed.MaxSpeculativeInflight = 4
-	resolved, err = engineapi.EffectiveKernelControl(windowed, gated)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !resolved.IsFrozenDefault() {
-		t.Fatalf("a finite window must fall back to the frozen kernel, got %#v", resolved)
-	}
-	// An explicit non-frozen policy is refused rather than downgraded.
-	windowed.EstimateReadPolicy = control.EstimateReadAbortReschedule
-	if _, err = engineapi.EffectiveKernelControl(windowed, gated); !errors.Is(err, engineapi.ErrInvalidKernelPolicy) {
-		t.Fatalf("explicit policy with a finite window must be refused, got %v", err)
+	// Changing the window must not silently change any kernel policy.
+	for _, limit := range []int{1, 8, 32, 128} {
+		windowed := base
+		windowed.MaxSpeculativeInflight = limit
+		for _, explicit := range []bool{false, true} {
+			if explicit {
+				windowed.EstimateReadPolicy = control.EstimateReadAbortReschedule
+				windowed.IdleWaitPolicy = control.IdleWaitPark
+				windowed.DependencyDispatch = control.DependencyDispatchReadyQueue
+			}
+			got, err := engineapi.EffectiveKernelControl(windowed, gated)
+			if err != nil || got != resolved {
+				t.Fatalf("L=%d changed kernel plan: %#v, %v (want %#v)", limit, got, err, resolved)
+			}
+		}
 	}
 }
 
@@ -340,14 +339,13 @@ func TestAbortedAttemptIsAccountedBeforeRedispatch(t *testing.T) {
 	}
 }
 
-// Workload-standardization validation keeps the existing worker target fixed
-// and uses only L=W. It adds no worker-count or finite-window experiment axis.
-func TestUnifiedWorkloadsMatchSerialAtFullWindow(t *testing.T) {
+// CQ2 x CQ3 keeps P=8 and the same kernel policies across finite/full windows.
+func TestUnifiedWorkloadsMatchSerialAcrossWindows(t *testing.T) {
 	for _, fraction := range []float64{0, 0.5, 1} {
 		for _, name := range []string{"single-rmw", "multi-rmw", "readonly", "mixed", "selector", "fanout"} {
 			cost := synthetic.ComputeConfig{MinUnits: 128, MaxUnits: 128, PrefixFraction: fraction}
 			tx := synthetic.TransactionConfig{Weight: 1, Template: synthetic.TemplateRMW, ReadKeys: 1, UpdateKeys: 1, Compute: cost}
-			c := synthetic.Config{Seed: 19, InitialKeys: 128, KeySpace: 64, BlockCount: 2, TransactionsPerBlock: 32}
+			c := synthetic.Config{Seed: 19, InitialKeys: 256, KeySpace: 128, BlockCount: 2, TransactionsPerBlock: 64}
 			switch name {
 			case "multi-rmw":
 				tx.ReadKeys, tx.UpdateKeys = 4, 2
@@ -374,18 +372,20 @@ func TestUnifiedWorkloadsMatchSerialAtFullWindow(t *testing.T) {
 				if dependency.name != "runtime" && dependency.name != "direct-wait" && dependency.name != "estimates" {
 					continue
 				}
-				t.Run(fmt.Sprintf("%s/prefix-%g/%s", name, fraction, dependency.name), func(t *testing.T) {
-					config := engineapi.RunConfig{Executors: 8, MaxSpeculativeInflight: 0,
-						DependencyMode: control.DependencyMVCCRuntime, DependencySource: dependency.source,
-						DependencyRepresentation: dependency.representation, DependencyRepresentationBuilder: dependency.builder,
-						DependencyWaitPolicy: dependency.wait, DependencyEstimateInjection: dependency.estimates,
-						EstimateReadPolicy: control.EstimateReadAbortReschedule, IdleWaitPolicy: control.IdleWaitPark,
-						DependencyDispatch: control.DependencyDispatchIndexOrder}
-					if dependency.gated {
-						config.DependencyDispatch = control.DependencyDispatchReadyQueue
-					}
-					assertMatchesSerialOracle(t, artifact, config)
-				})
+				for _, limit := range []int{0, 1, 8, 32, 64, 65} {
+					t.Run(fmt.Sprintf("%s/prefix-%g/%s/L-%d", name, fraction, dependency.name, limit), func(t *testing.T) {
+						config := engineapi.RunConfig{Executors: 8, MaxSpeculativeInflight: limit,
+							DependencyMode: control.DependencyMVCCRuntime, DependencySource: dependency.source,
+							DependencyRepresentation: dependency.representation, DependencyRepresentationBuilder: dependency.builder,
+							DependencyWaitPolicy: dependency.wait, DependencyEstimateInjection: dependency.estimates,
+							EstimateReadPolicy: control.EstimateReadAbortReschedule, IdleWaitPolicy: control.IdleWaitPark,
+							DependencyDispatch: control.DependencyDispatchIndexOrder}
+						if dependency.gated {
+							config.DependencyDispatch = control.DependencyDispatchReadyQueue
+						}
+						assertMatchesSerialOracle(t, artifact, config)
+					})
+				}
 			}
 		}
 	}

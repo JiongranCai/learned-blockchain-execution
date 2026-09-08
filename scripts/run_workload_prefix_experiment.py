@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare compute placement at P=8, L=W; run on a Linux experiment host."""
+"""Compare workloads and speculation windows at P=8 on a Linux experiment host."""
 
 import argparse
 import copy
@@ -83,6 +83,20 @@ def contention_mixture(hot_keys, cold_units, head_units, prefix, suffix):
 
 
 def configurations(base, args, stage_dir):
+    if args.suite == "speculation":
+        for profile, seed in itertools.product(
+                ("uniform-multikey", "single-hot", "zipf-mixed"), STAGES[args.stage][2]):
+            name = f"{profile}_c100000_p50_s{seed}"
+            config = matrix(base, profile, 100000, 0.5, seed,
+                            stage_dir / name, args.stage, args.notes)
+            keys = 65536 if profile == "uniform-multikey" else 1024
+            config["workload"]["synthetic"].update(
+                initial_keys=keys, key_space=keys, block_count=1, transactions_per_block=1536)
+            config["cases"] = [dict(case, id=f'{case["id"]}-l{limit or "w"}', executors=8,
+                                    max_speculative_inflight=limit)
+                               for limit in (1, 8, 32, 0) for case in config["cases"]]
+            yield name, config
+        return
     if args.suite == "placement":
         cells = itertools.product(PROFILES, (1000, 100000), (0, 0.5, 1), STAGES[args.stage][2])
         for profile, units, prefix, seed in cells:
@@ -109,11 +123,11 @@ def configurations(base, args, stage_dir):
 
 def describe_synthetic(config, suite, name):
     workload = config["workload"]["synthetic"]
-    subject = workload["mix"][0 if suite == "placement" else 1]
+    subject = workload["mix"][0 if suite in ("placement", "speculation") else 1]
     compute = subject["compute"]
     row = {"profile": name.rsplit("_c", 1)[0], "seed": workload["seed"],
            "compute_units": compute["max_units"], "prefix_fraction": compute["prefix_fraction"]}
-    if suite != "placement":
+    if suite not in ("placement", "speculation"):
         prefix = int(compute["max_units"] * compute["prefix_fraction"])
         row.update(hot_keys=subject["access"]["hot_keys"],
                    cold_fraction=workload["mix"][2]["weight"],
@@ -141,7 +155,8 @@ def summarize(stage_dir, suite="placement", describe=describe_synthetic):
                 raise ValueError(f"incomplete measurement rounds: {path}")
         description = describe(config, suite, path.stem)
         for case, case_records in by_case.items():
-            policy = case.rsplit("-p", 1)[0] if suite == "workers" else case
+            policy = (case.rsplit("-p", 1)[0] if suite == "workers" else
+                      case.rsplit("-l", 1)[0] if suite == "speculation" else case)
             suffix = case[len(policy):]
             reference = by_case["runtime" + suffix]
             ratios = [r["timing"]["execution_ns"] / b["timing"]["execution_ns"]
@@ -174,6 +189,20 @@ def summarize(stage_dir, suite="placement", describe=describe_synthetic):
                 ratios = [r["timing"]["execution_ns"] / b["timing"]["execution_ns"]
                           for r, b in zip(case_records, by_case[policy + "-p8"])]
                 row["ratio_to_p8"], row["p8_ci_low"], row["p8_ci_high"] = paired_bootstrap(ratios, description["seed"])
+            if suite == "speculation":
+                first = case_records[0]
+                available = first["metrics"]["speculation_telemetry_available"]
+                row.update(policy=policy, workers=first["case"]["executors"],
+                           max_speculative_inflight=first["case"]["max_speculative_inflight"],
+                           effective_speculation_limit=first["metrics"]["effective_speculation_limit"],
+                           speculation_telemetry_available=available,
+                           gomaxprocs=first["provenance"]["hardware"]["gomaxprocs"],
+                           cpu_allowed_list=first["provenance"]["hardware"]["cpu_allowed_list"])
+                for key in ("peak_speculative_inflight", "admission_stall_events", "admission_stall_ns"):
+                    row[key] = med(r["metrics"][key] for r in case_records) if available else None
+                ratios = [r["timing"]["execution_ns"] / b["timing"]["execution_ns"]
+                          for r, b in zip(case_records, by_case[policy + "-lw"])]
+                row["ratio_to_lw"], row["lw_ci_low"], row["lw_ci_high"] = paired_bootstrap(ratios, description["seed"])
             rows.append(row)
             if policy == "direct-ready":
                 direct_times = [r["timing"]["execution_ns"] for r in case_records]
@@ -187,6 +216,8 @@ def summarize(stage_dir, suite="placement", describe=describe_synthetic):
                                         "p_value": exact_sign_test(other_times, direct_times)})
                     if suite == "workers":
                         comparisons[-1]["workers"] = row["workers"]
+                    if suite == "speculation":
+                        comparisons[-1]["max_speculative_inflight"] = row["max_speculative_inflight"]
     holm_adjust(comparisons)
     write_csv(stage_dir / "summary.csv", rows)
     write_csv(stage_dir / "comparisons.csv", comparisons)
@@ -224,7 +255,7 @@ def run(args, stage_dir, configuration_factory=configurations, describe=describe
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", type=Path, help="server project results/runs/<run-id>")
-    parser.add_argument("--suite", choices=("placement", "contention", "prefix-scaling"), default="placement")
+    parser.add_argument("--suite", choices=("placement", "contention", "prefix-scaling", "speculation"), default="placement")
     parser.add_argument("--stage", choices=STAGES, default="pilot")
     parser.add_argument("--notes", default="")
     parser.add_argument("--summarize-only", action="store_true")

@@ -39,6 +39,9 @@
   "cases": [
     {
       "id": "serial-1",
+      "estimate_read_policy": "suspend_in_place",
+      "idle_wait_policy": "gosched",
+      "dependency_dispatch": "index_order",
       "engine": "serial",
       "policy": "serial_preset",
       "executors": 1,

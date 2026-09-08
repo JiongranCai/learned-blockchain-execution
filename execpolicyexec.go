@@ -186,12 +186,13 @@ func (e *policyExecutor) runTransaction(txn TxnIndex, view *MultiMVMemoryView) (
 
 func (e *policyExecutor) needsReexecution(version TxnVersion) (TxnVersion, TaskKind) {
 	e.sched.base.validatedTxns.Add(1)
+	token := e.sched.validationToken(version.Index)
 	valid := e.mvMemory.ValidateReadSet(version.Index)
 	aborted := !valid && e.sched.base.TryValidationAbort(version)
 	if aborted {
 		e.mvMemory.ConvertWritesToEstimates(version.Index)
 	}
-	return e.sched.finishValidation(version.Index, aborted)
+	return e.sched.finishValidation(version, valid, aborted, token)
 }
 
 func (e *policyExecutor) newView(txn TxnIndex) *MultiMVMemoryView {

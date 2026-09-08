@@ -122,15 +122,22 @@ func ExecuteBlockWithMaxSpeculativeInflightAndEstimates(
 }
 
 type admissionScheduler struct {
-	base       *Scheduler
+	*admissionWindow
+	base *Scheduler
+	mu   sync.Mutex
+	wake chan struct{}
+}
+
+// admissionWindow is shared by the legacy and policy schedulers. Its state is
+// protected by the owning scheduler's mutex; retries and deferred transactions
+// keep their original position in this stable-prefix window.
+type admissionWindow struct {
 	limit      int
-	mu         sync.Mutex
 	stable     int
 	passed     []bool
 	epoch      []uint64
 	generation uint64
 	peak       uint64
-	wake       chan struct{}
 
 	stallEvents atomic.Uint64
 	stallNS     atomic.Uint64
@@ -138,11 +145,49 @@ type admissionScheduler struct {
 
 func newAdmissionScheduler(blockSize, limit int) *admissionScheduler {
 	return &admissionScheduler{
-		base:   NewScheduler(blockSize),
+		admissionWindow: newAdmissionWindow(blockSize, limit),
+		base:            NewScheduler(blockSize),
+		wake:            make(chan struct{}),
+	}
+}
+
+func newAdmissionWindow(blockSize, limit int) *admissionWindow {
+	return &admissionWindow{
 		limit:  limit,
 		passed: make([]bool, blockSize),
 		epoch:  make([]uint64, blockSize),
-		wake:   make(chan struct{}),
+	}
+}
+
+func (w *admissionWindow) allows(next int) bool {
+	return next-w.stable < w.limit
+}
+
+func (w *admissionWindow) admit(next int) bool {
+	if !w.allows(next) {
+		return false
+	}
+	w.peak = max(w.peak, uint64(next+1-w.stable))
+	return true
+}
+
+func (w *admissionWindow) pass(transaction TxnIndex, token uint64) bool {
+	if w.epoch[transaction] != token {
+		return false
+	}
+	w.passed[transaction] = true
+	before := w.stable
+	for w.stable < len(w.passed) && w.passed[w.stable] {
+		w.stable++
+	}
+	return w.stable != before
+}
+
+func (w *admissionWindow) invalidateFrom(first, admitted int) {
+	w.generation++
+	for transaction := first; transaction < admitted; transaction++ {
+		w.epoch[transaction] = w.generation
+		w.passed[transaction] = false
 	}
 }
 
@@ -163,17 +208,13 @@ func (s *admissionScheduler) nextTask() (TxnVersion, TaskKind, <-chan struct{}) 
 		s.base.CheckDone()
 		return InvalidTxnVersion, TaskKindExecution, nil
 	}
-	if next >= s.stable+s.limit {
+	if !s.admit(next) {
 		wake := s.wake
 		s.mu.Unlock()
 		return InvalidTxnVersion, TaskKindExecution, wake
 	}
 	IncrAtomic(&s.base.num_active_tasks)
 	index := s.base.execution_idx.Add(1) - 1
-	inflight := index + 1 - uint64(s.stable)
-	if inflight > s.peak {
-		s.peak = inflight
-	}
 	s.mu.Unlock()
 	return s.base.TryIncarnate(TxnIndex(index)), TaskKindExecution, nil
 }
@@ -181,7 +222,7 @@ func (s *admissionScheduler) nextTask() (TxnVersion, TaskKind, <-chan struct{}) 
 func (s *admissionScheduler) finishExecution(version TxnVersion, wroteNewPath bool) (TxnVersion, TaskKind) {
 	s.mu.Lock()
 	if wroteNewPath && s.base.validation_idx.Load() > uint64(version.Index) {
-		s.invalidateFromLocked(int(version.Index))
+		s.invalidateFrom(int(version.Index), min(int(s.base.execution_idx.Load()), s.base.block_size))
 	}
 	next, kind := s.base.FinishExecution(version, wroteNewPath)
 	s.notifyLocked()
@@ -204,7 +245,7 @@ func (s *admissionScheduler) finishValidation(
 ) (TxnVersion, TaskKind) {
 	if aborted {
 		s.mu.Lock()
-		s.invalidateFromLocked(int(version.Index))
+		s.invalidateFrom(int(version.Index), min(int(s.base.execution_idx.Load()), s.base.block_size))
 		s.notifyLocked()
 		s.mu.Unlock()
 	}
@@ -212,28 +253,13 @@ func (s *admissionScheduler) finishValidation(
 	next, kind := s.base.FinishValidation(version.Index, aborted)
 	if valid && !aborted {
 		s.mu.Lock()
-		if s.epoch[version.Index] == token {
-			s.passed[version.Index] = true
-			before := s.stable
-			for s.stable < len(s.passed) && s.passed[s.stable] {
-				s.stable++
-			}
-			if s.stable != before {
-				s.notifyLocked()
-			}
+		executed, incarnation := s.base.txn_status[version.Index].IsExecuted()
+		if executed && incarnation == version.Incarnation && s.pass(version.Index, token) {
+			s.notifyLocked()
 		}
 		s.mu.Unlock()
 	}
 	return next, kind
-}
-
-func (s *admissionScheduler) invalidateFromLocked(first int) {
-	s.generation++
-	admitted := min(int(s.base.execution_idx.Load()), s.base.block_size)
-	for transaction := first; transaction < admitted; transaction++ {
-		s.epoch[transaction] = s.generation
-		s.passed[transaction] = false
-	}
 }
 
 func (s *admissionScheduler) notifyLocked() {
@@ -241,20 +267,23 @@ func (s *admissionScheduler) notifyLocked() {
 	s.wake = make(chan struct{})
 }
 
-func (s *admissionScheduler) recordStall(elapsed time.Duration) {
+func (s *admissionWindow) recordStall(elapsed time.Duration) {
 	s.stallEvents.Add(1)
 	s.stallNS.Add(uint64(elapsed))
 }
 
 func (s *admissionScheduler) stats() SpeculationStats {
 	s.mu.Lock()
-	peak := s.peak
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	return s.admissionWindow.stats()
+}
+
+func (s *admissionWindow) stats() SpeculationStats {
 	return SpeculationStats{
 		EffectiveLimit:       uint64(s.limit),
 		LimitApplied:         true,
 		TelemetryAvailable:   true,
-		PeakInflight:         peak,
+		PeakInflight:         s.peak,
 		AdmissionStallEvents: s.stallEvents.Load(),
 		AdmissionStallNS:     s.stallNS.Load(),
 	}

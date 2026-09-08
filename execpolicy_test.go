@@ -125,8 +125,8 @@ func TestKernelPolicyReadyQueueDispatch(t *testing.T) {
 			EstimateReadAbortReschedule,
 			EstimateReadSuspendYieldWorker,
 		} {
-			for _, executors := range []int{1, 4, 8} {
-				name := gate.name + "/" + string(estimate) + "/executors-" + strconv.Itoa(executors)
+			for _, setting := range []struct{ executors, limit int }{{1, 0}, {4, 0}, {8, 0}, {8, 1}, {8, 8}} {
+				name := gate.name + "/" + string(estimate) + "/executors-" + strconv.Itoa(setting.executors) + "/L-" + strconv.Itoa(setting.limit)
 				t.Run(name, func(t *testing.T) {
 					policy := gate.build(size)
 					policy.EstimateRead = estimate
@@ -134,7 +134,7 @@ func TestKernelPolicyReadyQueueDispatch(t *testing.T) {
 					storage := NewMultiMemDB(stores)
 					_, stats, err := ExecuteBlockWithKernelPolicy(
 						context.Background(), size, stores, storage,
-						executors, 0, nil, policy, block.ExecuteTx,
+						setting.executors, setting.limit, nil, policy, block.ExecuteTx,
 					)
 					require.NoError(t, err)
 
@@ -213,13 +213,17 @@ func TestKernelPolicyValidation(t *testing.T) {
 	)
 	require.True(t, errors.Is(err, ErrKernelPolicyGate), "expected %v, got %v", ErrKernelPolicyGate, err)
 
-	// A finite speculation window is refused rather than silently ignored.
-	_, _, err = ExecuteBlockWithKernelPolicy(
+	// The policy kernel applies the finite speculation window.
+	window, kernel, err := ExecuteBlockWithKernelPolicy(
 		context.Background(), 8, stores, NewMultiMemDB(stores), 2, 2, nil,
 		KernelPolicy{IdleWait: IdleWaitPark},
 		func(TxnIndex, MultiStore) {},
 	)
-	require.True(t, errors.Is(err, ErrKernelPolicyInflight), "expected %v, got %v", ErrKernelPolicyInflight, err)
+	require.NoError(t, err)
+	require.True(t, kernel.Applied)
+	require.True(t, window.LimitApplied)
+	require.Equal(t, uint64(2), window.EffectiveLimit)
+	require.True(t, window.PeakInflight <= 2)
 }
 
 // TestKernelPolicyArgumentValidationIsPathIndependent pins the fix for a
