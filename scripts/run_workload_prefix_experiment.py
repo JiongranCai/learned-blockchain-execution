@@ -210,16 +210,18 @@ def summarize(stage_dir, suite="placement", describe=describe_synthetic):
                           for r, b in zip(case_records, by_case[policy + "-lw"])]
                 row["ratio_to_lw"], row["lw_ci_low"], row["lw_ci_high"] = paired_bootstrap(ratios, description["seed"])
             rows.append(row)
-            if policy == "direct-ready":
-                direct_times = [r["timing"]["execution_ns"] for r in case_records]
-                for other in ("runtime", "estimate-abort"):
+            if policy == "direct-ready" or (suite == "smallbank" and policy == "estimate-abort"):
+                candidate_times = [r["timing"]["execution_ns"] for r in case_records]
+                others = ("runtime", "estimate-abort") if policy == "direct-ready" else ("runtime",)
+                label = "direct" if policy == "direct-ready" else "estimate"
+                for other in others:
                     other_times = [r["timing"]["execution_ns"] for r in by_case[other + suffix]]
-                    pair = [a / b for a, b in zip(direct_times, other_times)]
+                    pair = [a / b for a, b in zip(candidate_times, other_times)]
                     effect, lower, upper = paired_bootstrap(pair, description["seed"])
                     comparisons.append({"cell": path.stem, "profile": row["profile"],
-                                        "seed": description["seed"], "comparison_family": f"direct_vs_{other}",
+                                        "seed": description["seed"], "comparison_family": f"{label}_vs_{other}",
                                         "ratio": effect, "ci_low": lower, "ci_high": upper,
-                                        "p_value": exact_sign_test(other_times, direct_times)})
+                                        "p_value": exact_sign_test(other_times, candidate_times)})
                     if suite == "workers":
                         comparisons[-1]["workers"] = row["workers"]
                     if suite == "speculation":

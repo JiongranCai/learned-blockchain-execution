@@ -140,9 +140,10 @@ class WorkerExperimentTest(unittest.TestCase):
                     self.assertEqual(row["static_read_keys"], "" if case["id"] == "runtime" else "6")
             with (root / "comparisons.csv").open() as source:
                 comparisons = list(csv.DictReader(source))
-            self.assertEqual(len(comparisons), 2 * len(settings))
+            self.assertEqual(len(comparisons), (3 if suite == "smallbank" else 2) * len(settings))
             for row in comparisons:
-                expected = 0.8 if row["comparison_family"] == "direct_vs_runtime" else 0.8 / 1.2
+                expected = {"direct_vs_runtime": 0.8, "direct_vs_estimate-abort": 0.8 / 1.2,
+                            "estimate_vs_runtime": 1.2}[row["comparison_family"]]
                 self.assertAlmostEqual(float(row["ratio"]), expected)
             path.write_text("\n".join(json.dumps(r) for r in records[:-1]))
             with self.assertRaisesRegex(ValueError, "incomplete measurement rounds"):

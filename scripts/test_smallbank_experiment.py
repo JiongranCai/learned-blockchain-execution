@@ -9,6 +9,19 @@ from run_workload_prefix_experiment import REPO
 
 
 class SmallBankExperimentTest(unittest.TestCase):
+    def test_selected_profiles_and_rounds_keep_the_same_workloads(self):
+        base = json.loads((REPO / "configs/experiments/workload/standard-smoke.json").read_text())
+        args = SimpleNamespace(stage="repeated", notes="test", profiles=["selective-a50-p0"],
+                               measurement_rounds=15)
+        cells = list(configurations(base, args, Path("unused")))
+        self.assertEqual(len(cells), 3)
+        default = dict(configurations(base, SimpleNamespace(stage="repeated", notes="test"), Path("unused")))
+        for name, config in cells:
+            self.assertEqual(config["measurement_rounds"], 15)
+            reference = copy.deepcopy(default[name])
+            reference["measurement_rounds"] = 15
+            self.assertEqual(config, reference)
+
     def test_matrices_pair_policies_at_p8_lw_and_preserve_input(self):
         base = json.loads((REPO / "configs/experiments/workload/standard-smoke.json").read_text())
         original = copy.deepcopy(base)

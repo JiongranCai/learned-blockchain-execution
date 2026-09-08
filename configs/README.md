@@ -251,6 +251,14 @@ advantages, not a claim that either policy wins. The original synthetic selectiv
 and HDU diagnostics remain available. Finite L is supported by the same SmallBank
 inputs, but this first suite holds L fixed to isolate CQ3.
 
+`--profiles NAME ...` selects a subset for confirmation; `--measurement-rounds N`
+overrides the number of measurements per case. Choose profiles and a fixed count
+from pilot evidence before running independent repeated seeds. Fewer measurements
+retain the nominal 95% interval level but may widen intervals and reduce power;
+uncertain rankings remain inconclusive. SmallBank's `comparisons.csv` includes all
+three pairwise comparisons, including Estimate versus Runtime, with Holm correction
+within each comparison family and stage.
+
 Run on the Linux experiment host after selecting its CPU binding, for example:
 
 ```sh

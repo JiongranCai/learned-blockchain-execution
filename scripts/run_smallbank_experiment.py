@@ -54,8 +54,12 @@ def profiles():
 
 def configurations(base, args, stage_dir):
     for (profile, mix, checking), seed in itertools.product(profiles(), SEEDS[args.stage]):
+        if getattr(args, "profiles", None) and profile not in args.profiles:
+            continue
         name = f"{profile}_s{seed}"
         config = matrix(base, "single-hot", 1, 0, seed, stage_dir / name, args.stage, args.notes)
+        if getattr(args, "measurement_rounds", None) is not None:
+            config["measurement_rounds"] = args.measurement_rounds
         config["workload"] = {"smallbank": {
             "seed": seed, "accounts": 10000, "initial_checking": dict(checking),
             "initial_savings": {"min": 1000000, "max": 1000000},
@@ -77,9 +81,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", type=Path, help="server repository results/runs/<run-id>")
     parser.add_argument("--stage", choices=SEEDS, default="pilot")
+    parser.add_argument("--profiles", nargs="+", choices=[name for name, _, _ in profiles()],
+                        help="run only these workload profiles")
+    parser.add_argument("--measurement-rounds", type=int,
+                        help="override measurements per case; choose before starting this stage")
     parser.add_argument("--notes", default="")
     parser.add_argument("--summarize-only", action="store_true")
     args = parser.parse_args()
+    if args.measurement_rounds is not None and args.measurement_rounds < 1:
+        parser.error("--measurement-rounds must be positive")
     args.suite = "smallbank"
     stage_dir = args.run_dir.resolve() / args.stage
     if args.summarize_only:
