@@ -192,9 +192,10 @@ func TestFiniteSpeculationLimitEmitsBoundedAdmissionTelemetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertEquivalent(t, oracle, candidate, serialState, candidateState)
+	// A fast block may finish without filling the window or stalling a worker.
+	// Forced-stall behavior is covered by the scheduler's synchronization tests.
 	if !trace.WorkAvailable || !trace.Work.SpeculationLimitApplied || !trace.Work.SpeculationTelemetryAvailable ||
-		trace.Work.SpeculationLimit != 4 || trace.Work.PeakSpeculativeInflight == 0 || trace.Work.PeakSpeculativeInflight > 4 ||
-		trace.Work.AdmissionStallEvents == 0 || trace.Work.AdmissionStallNS == 0 {
+		trace.Work.SpeculationLimit != 4 || trace.Work.PeakSpeculativeInflight == 0 || trace.Work.PeakSpeculativeInflight > 4 {
 		t.Fatalf("invalid speculation telemetry: %#v", trace.Work)
 	}
 }

@@ -256,7 +256,10 @@ inputs, but this first suite holds L fixed to isolate CQ3.
 The original suite had 16 profiles; the two low-compute and four sparse-selective
 profiles were added after its first server results. Saved configs identify the
 exact selection used by each experiment. `--seeds N ...` supplies fresh seeds for
-a separate follow-up stage.
+a separate follow-up stage. `--block-count` and `--block-size` override the default
+4 x 1,536 partition; for example, 48 x 128 preserves the 6,144-transaction stream
+while exposing effects that may be amortized in long blocks. Report this change
+explicitly: it also changes the number of block-level planning and publication steps.
 
 `--profiles NAME ...` selects a subset for confirmation; `--measurement-rounds N`
 overrides the number of measurements per case. Choose profiles and a fixed count

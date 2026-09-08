@@ -77,7 +77,8 @@ def configurations(base, args, stage_dir):
         config["workload"] = {"smallbank": {
             "seed": seed, "accounts": 10000, "initial_checking": dict(checking),
             "initial_savings": {"min": 1000000, "max": 1000000},
-            "block_count": 4, "transactions_per_block": 1536, "mix": copy.deepcopy(mix)}}
+            "block_count": getattr(args, "block_count", 4),
+            "transactions_per_block": getattr(args, "block_size", 1536), "mix": copy.deepcopy(mix)}}
         config["cases"] = [dict(case, executors=8, max_speculative_inflight=0) for case in config["cases"]]
         yield name, config
 
@@ -98,6 +99,8 @@ def main():
     parser.add_argument("--profiles", nargs="+", choices=[name for name, _, _ in profiles()],
                         help="run only these workload profiles")
     parser.add_argument("--seeds", nargs="+", type=int, help="override workload seeds for a separate experiment stage")
+    parser.add_argument("--block-count", type=int, default=4)
+    parser.add_argument("--block-size", type=int, default=1536, help="transactions per block")
     parser.add_argument("--measurement-rounds", type=int,
                         help="override measurements per case; choose before starting this stage")
     parser.add_argument("--notes", default="")
