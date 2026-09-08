@@ -24,9 +24,11 @@ class SmallBankExperimentTest(unittest.TestCase):
         args.seeds = [151, 15151]
         self.assertEqual([config["workload"]["smallbank"]["seed"] for _, config in configurations(base, args, Path("unused"))], args.seeds)
         args.block_count, args.block_size = 48, 128
+        args.accounts = 64
         for _, config in configurations(base, args, Path("unused")):
             bank = config["workload"]["smallbank"]
             self.assertEqual((bank["block_count"], bank["transactions_per_block"]), (48, 128))
+            self.assertEqual(bank["accounts"], 64)
 
     def test_matrices_pair_policies_at_p8_lw_and_preserve_input(self):
         base = json.loads((REPO / "configs/experiments/workload/standard-smoke.json").read_text())

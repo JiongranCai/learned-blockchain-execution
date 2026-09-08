@@ -260,6 +260,8 @@ a separate follow-up stage. `--block-count` and `--block-size` override the defa
 4 x 1,536 partition; for example, 48 x 128 preserves the 6,144-transaction stream
 while exposing effects that may be amortized in long blocks. Report this change
 explicitly: it also changes the number of block-level planning and publication steps.
+`--accounts` changes initialized state size (default 10,000); record it when
+using a smaller state for short-block mechanism controls.
 
 `--profiles NAME ...` selects a subset for confirmation; `--measurement-rounds N`
 overrides the number of measurements per case. Choose profiles and a fixed count
