@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"sort"
 
 	"github.com/crypto-org-chain/go-block-stm/internal/model"
 	"github.com/crypto-org-chain/go-block-stm/internal/runtime/flat"
@@ -51,20 +50,8 @@ type TransactionConfig struct {
 	Compute       ComputeConfig `json:"compute"`
 }
 
-type AccessConfig struct {
-	Kind           string  `json:"kind,omitempty"`
-	HotKeys        int     `json:"hot_keys,omitempty"`
-	HotProbability float64 `json:"hot_probability,omitempty"`
-	// Finite Zipf: P(rank) is proportional to rank^(-theta), ranks 1..KeySpace.
-	// This includes the [0,1] exponents used by transactional YCSB.
-	Theta float64 `json:"theta,omitempty"`
-}
-
-type ComputeConfig struct {
-	MinUnits       uint64  `json:"min_units"`
-	MaxUnits       uint64  `json:"max_units"`
-	PrefixFraction float64 `json:"prefix_fraction"`
-}
+type AccessConfig = workload.AccessConfig
+type ComputeConfig = workload.ComputeConfig
 
 func Generate(config Config) (workload.Artifact, error) {
 	if err := validateConfig(config); err != nil {
@@ -89,10 +76,10 @@ func Generate(config Config) (workload.Artifact, error) {
 		initial[i] = int64(initialRNG.Intn(10_000))
 		artifact.InitialState = append(artifact.InitialState, model.StateEntry{Key: stateKey(i), Value: flat.EncodeInt64(initial[i])})
 	}
-	samplers := make([]keySampler, len(config.Mix))
+	samplers := make([]workload.KeySampler, len(config.Mix))
 	var weight float64
 	for i, tx := range config.Mix {
-		samplers[i] = newKeySampler(config.KeySpace, tx.Access)
+		samplers[i] = workload.NewKeySampler(config.KeySpace, tx.Access)
 		weight += tx.Weight
 	}
 	global := 0
@@ -109,20 +96,18 @@ func Generate(config Config) (workload.Artifact, error) {
 				}
 			}
 			tx := config.Mix[selected]
-			units := tx.Compute.MinUnits + uint64(costRNG.Int63n(int64(tx.Compute.MaxUnits-tx.Compute.MinUnits+1)))
-			prefix := uint64(float64(units) * tx.Compute.PrefixFraction)
-			suffix := units - prefix
+			prefix, suffix := tx.Compute.Sample(costRNG)
 			delta := int64(keyRNG.Intn(11) - 5)
 			sample := &samplers[selected]
 			var instructions []model.Instruction
 			switch tx.Template {
 			case TemplateRMW, TemplateReadWrite:
-				reads := sample.keys(keyRNG, tx.ReadKeys)
+				reads := sample.Keys(keyRNG, tx.ReadKeys)
 				var writes []int
 				if tx.Template == TemplateRMW {
 					writes = reads[:tx.UpdateKeys]
 				} else {
-					writes = sample.keys(keyRNG, tx.UpdateKeys)
+					writes = sample.Keys(keyRNG, tx.UpdateKeys)
 				}
 				instructions = linearProgram(reads, writes, delta, prefix, suffix)
 			case TemplateBranch, TemplateSelective:
@@ -130,8 +115,8 @@ func Generate(config Config) (workload.Artifact, error) {
 				var candidates []int
 				var write int
 				if tx.Template == TemplateBranch {
-					candidates = []int{sample.key(keyRNG), sample.key(keyRNG)}
-					write = sample.key(keyRNG)
+					candidates = []int{sample.Key(keyRNG), sample.Key(keyRNG)}
+					write = sample.Key(keyRNG)
 				} else {
 					for k := 0; k < tx.CandidateKeys; k++ {
 						candidates = append(candidates, k)
@@ -197,34 +182,14 @@ func validateConfig(c Config) error {
 			return bad("weights must be positive and finite")
 		}
 		totalWeight += tx.Weight
-		// Float64 preserves unit counts through 2^53; bound here also keeps
-		// the prefix split and generated gas budget exact and well within uint64.
-		if tx.Compute.MinUnits > tx.Compute.MaxUnits || tx.Compute.MaxUnits > 1<<53 || !probability(tx.Compute.PrefixFraction) {
-			return bad("invalid compute range or prefix_fraction")
+		if err := tx.Compute.Validate(); err != nil {
+			return bad(err.Error())
 		}
-		support := c.KeySpace
-		switch tx.Access.Kind {
-		case "", "uniform":
-			if tx.Access.HotKeys != 0 || tx.Access.HotProbability != 0 || tx.Access.Theta != 0 {
-				return bad("uniform access does not use hotspot or Zipf parameters")
-			}
-		case "hotspot":
-			if tx.Access.HotKeys <= 0 || tx.Access.HotKeys >= c.KeySpace || !probability(tx.Access.HotProbability) || tx.Access.Theta != 0 {
-				return bad("invalid hotspot parameters")
-			}
-			if tx.Access.HotProbability == 1 {
-				support = tx.Access.HotKeys
-			}
-			if tx.Access.HotProbability == 0 {
-				support = c.KeySpace - tx.Access.HotKeys
-			}
-		case "zipf":
-			if !probability(tx.Access.Theta) || tx.Access.HotKeys != 0 || tx.Access.HotProbability != 0 {
-				return bad("finite Zipf requires theta in [0,1]")
-			}
-		default:
-			return bad("unknown access distribution")
+		support, err := tx.Access.Support(c.KeySpace)
+		if err != nil {
+			return bad(err.Error())
 		}
+
 		if tx.ReadKeys < 0 || tx.UpdateKeys < 0 || tx.CandidateKeys < 0 || tx.FanIn < 0 {
 			return bad("negative key count")
 		}
@@ -267,77 +232,6 @@ func validateConfig(c Config) error {
 		return bad("sum of weights overflows")
 	}
 	return nil
-}
-
-func probability(v float64) bool { return !math.IsNaN(v) && v >= 0 && v <= 1 }
-
-type keySampler struct {
-	size   int
-	access AccessConfig
-	cdf    []float64
-}
-
-func newKeySampler(size int, access AccessConfig) keySampler {
-	s := keySampler{size: size, access: access}
-	if access.Kind == "zipf" {
-		s.cdf = make([]float64, size)
-		var sum float64
-		for i := range s.cdf {
-			sum += math.Pow(float64(i+1), -access.Theta)
-			s.cdf[i] = sum
-		}
-	}
-	return s
-}
-
-func (s *keySampler) key(rng *rand.Rand) int {
-	switch s.access.Kind {
-	case "hotspot":
-		if rng.Float64() < s.access.HotProbability {
-			return rng.Intn(s.access.HotKeys)
-		}
-		return s.access.HotKeys + rng.Intn(s.size-s.access.HotKeys)
-	case "zipf":
-		u := rng.Float64() * s.cdf[len(s.cdf)-1]
-		return sort.Search(len(s.cdf), func(i int) bool { return s.cdf[i] >= u })
-	default:
-		return rng.Intn(s.size)
-	}
-}
-
-func (s *keySampler) keys(rng *rand.Rand, count int) []int {
-	keys := make([]int, 0, count)
-	seen := make(map[int]bool, count)
-	hotTaken := 0
-	for len(keys) < count {
-		var k int
-		if s.access.Kind == "hotspot" {
-			// Condition on keys not yet selected. Once the hot set is full,
-			// draw directly from the cold tail, even for probabilities near 1.
-			hot := s.access.HotKeys
-			cold := s.size - hot
-			h := s.access.HotProbability * float64(hot-hotTaken) / float64(hot)
-			c := (1 - s.access.HotProbability) * float64(cold-(len(keys)-hotTaken)) / float64(cold)
-			start, size := hot, cold
-			if rng.Float64()*(h+c) < h {
-				start, size = 0, hot
-				hotTaken++
-			}
-			for {
-				k = start + rng.Intn(size)
-				if !seen[k] {
-					break
-				}
-			}
-		} else {
-			k = s.key(rng)
-		}
-		if !seen[k] {
-			keys = append(keys, k)
-			seen[k] = true
-		}
-	}
-	return keys
 }
 
 func linearProgram(reads, writes []int, delta int64, prefix, suffix uint64) []model.Instruction {

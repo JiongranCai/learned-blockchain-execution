@@ -2,7 +2,7 @@
 
 Research framework for learning workload-aware blockchain transaction execution strategies by decomposing protocols into configurable mechanisms: dependency acquisition, representation, dispatch, and conflict handling.
 
-Built on [go-block-stm](https://github.com/crypto-org-chain/go-block-stm), with a deterministic transaction runtime, synthetic workload generator, serial reference engine, and experiment runner.
+Built on [go-block-stm](https://github.com/crypto-org-chain/go-block-stm), with a deterministic transaction runtime, SmallBank and synthetic workloads, a serial reference engine, and an experiment runner.
 
 ## Build and test
 
@@ -20,8 +20,8 @@ The full test, race, and vet suite is available through `./scripts/verify_upstre
 Develop and test locally; run performance experiments on the Linux server.
 
 ```sh
-/tmp/bench validate -config configs/experiments/workload/standard-smoke.json
-/tmp/bench run -config configs/experiments/workload/standard-smoke.json
+/tmp/bench validate -config configs/experiments/workload/smallbank-smoke.json
+/tmp/bench run -config configs/experiments/workload/smallbank-smoke.json
 ```
 
 `validate` checks execution against the serial reference. `run` includes this check, then measures cases in fresh processes. Set output paths in the experiment config to a separate results directory on the server.

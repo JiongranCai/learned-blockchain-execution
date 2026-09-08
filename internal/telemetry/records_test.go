@@ -12,8 +12,8 @@ import (
 func TestCollectMetricsUsesCanonicalResultsAndTraceCounters(t *testing.T) {
 	results := []model.BlockResult{{
 		Transactions: []model.TxResult{
-			{Status: model.TxStatusSuccess, UnitsUsed: 7},
-			{Status: model.TxStatusFailed, UnitsUsed: 3},
+			{Status: model.TxStatusSuccess, UnitsUsed: 7, Reads: []model.ReadRecord{{Key: []byte("a")}, {Key: []byte("b")}}},
+			{Status: model.TxStatusFailed, UnitsUsed: 3, Reads: []model.ReadRecord{{Key: []byte("a")}}},
 		},
 	}}
 	traces := []control.Trace{{
@@ -75,6 +75,9 @@ func TestCollectMetricsUsesCanonicalResultsAndTraceCounters(t *testing.T) {
 		},
 	}}
 	metrics := telemetry.CollectMetrics(results, traces, 1_000_000_000, 4096)
+	if metrics.FinalReadOperations != 3 {
+		t.Fatal("final read count included replays or lost failed-transaction reads")
+	}
 	if metrics.Blocks != 1 || metrics.Transactions != 2 || metrics.SuccessfulTransactions != 1 || metrics.FailedTransactions != 1 {
 		t.Fatalf("unexpected transaction metrics: %#v", metrics)
 	}

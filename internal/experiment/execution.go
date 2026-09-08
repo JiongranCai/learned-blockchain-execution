@@ -20,6 +20,7 @@ import (
 	"github.com/crypto-org-chain/go-block-stm/internal/policy/fixed"
 	"github.com/crypto-org-chain/go-block-stm/internal/telemetry"
 	"github.com/crypto-org-chain/go-block-stm/internal/workload"
+	"github.com/crypto-org-chain/go-block-stm/internal/workload/smallbank"
 	"github.com/crypto-org-chain/go-block-stm/internal/workload/synthetic"
 )
 
@@ -49,7 +50,13 @@ func LoadWorkload(config WorkloadConfig) (workload.Artifact, error) {
 		}
 		return workload.ParseDescriptor(encoded)
 	}
-	return synthetic.Generate(*config.Synthetic)
+	if config.SmallBank != nil {
+		return smallbank.Generate(*config.SmallBank)
+	}
+	if config.Synthetic != nil {
+		return synthetic.Generate(*config.Synthetic)
+	}
+	return workload.Artifact{}, fmt.Errorf("workload source is missing")
 }
 
 func Execute(ctx context.Context, artifact workload.Artifact, experimentCase CaseConfig, omitDigest bool) (Execution, error) {

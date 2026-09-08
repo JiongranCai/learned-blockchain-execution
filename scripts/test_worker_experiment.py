@@ -74,6 +74,9 @@ class WorkerExperimentTest(unittest.TestCase):
     def test_existing_summary_keeps_original_case_names(self):
         self.check_summary("placement")
 
+    def test_smallbank_summary_includes_semantic_accesses_and_failures(self):
+        self.check_summary("smallbank")
+
     def check_summary(self, suite):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -92,7 +95,10 @@ class WorkerExperimentTest(unittest.TestCase):
                         metrics["kernel_policy"] = {key: 3 for key in ("estimate_aborts", "dispatch_deferrals",
                             "estimate_suspends", "estimate_suspend_ns", "worker_yields", "idle_parks")}
                         metrics["kernel_policy"]["peak_runnable_workers"] = workers + round_index
-                        metrics["dependency"] = {"acquisition_ns": 1, "representation_ns": 2, "wait_ns": 7}
+                        metrics["dependency"] = {"acquisition_ns": 1, "representation_ns": 2, "wait_ns": 7,
+                                                 "static_read_keys": 6}
+                        metrics.update(transactions=4, successful_transactions=3, failed_transactions=1,
+                                       final_read_operations=5, committed_goodput_per_second=300)
                         metrics.update(speculation_telemetry_available=bool(limit), effective_speculation_limit=limit or 1536,
                                        peak_speculative_inflight=limit, admission_stall_events=4, admission_stall_ns=5)
                         records.append({"case": case, "phase": "measurement", "round": round_index,
@@ -127,6 +133,11 @@ class WorkerExperimentTest(unittest.TestCase):
                     self.assertEqual(int(row["effective_speculation_limit"]), limit or 1536)
                     self.assertEqual(row["peak_speculative_inflight"], "1" if limit else "")
                     self.assertEqual(row["admission_stall_events"], "4" if limit else "")
+                if suite == "smallbank":
+                    self.assertEqual(row["transactions"], "4")
+                    self.assertEqual(row["failed_transactions"], "1")
+                    self.assertEqual(row["final_read_operations"], "5")
+                    self.assertEqual(row["static_read_keys"], "" if case["id"] == "runtime" else "6")
             with (root / "comparisons.csv").open() as source:
                 comparisons = list(csv.DictReader(source))
             self.assertEqual(len(comparisons), 2 * len(settings))

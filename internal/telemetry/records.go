@@ -92,6 +92,7 @@ type Metrics struct {
 	Transactions                  uint64                       `json:"transactions"`
 	SuccessfulTransactions        uint64                       `json:"successful_transactions"`
 	FailedTransactions            uint64                       `json:"failed_transactions"`
+	FinalReadOperations           uint64                       `json:"final_read_operations"`
 	UsefulExecutionUnits          uint64                       `json:"useful_execution_units"`
 	ReexecutedExecutionUnits      uint64                       `json:"reexecuted_execution_units"`
 	DiscardedExecutionUnits       uint64                       `json:"discarded_execution_units"`
@@ -186,6 +187,9 @@ func CollectMetrics(results []model.BlockResult, traces []control.Trace, executi
 	for _, result := range results {
 		for _, transaction := range result.Transactions {
 			metrics.Transactions++
+			// Final incarnations only; abandoned speculative reads are not
+			// semantic accesses. Repeated reads of one key count separately.
+			metrics.FinalReadOperations += uint64(len(transaction.Reads))
 			metrics.UsefulExecutionUnits += transaction.UnitsUsed
 			if transaction.Status == model.TxStatusSuccess {
 				metrics.SuccessfulTransactions++

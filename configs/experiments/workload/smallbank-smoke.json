@@ -1,0 +1,195 @@
+{
+  "schema_version": "experiment-matrix-v8",
+  "run_class": "smoke",
+  "workload": {
+    "smallbank": {
+      "seed": 131,
+      "accounts": 64,
+      "initial_checking": {
+        "min": 100,
+        "max": 199
+      },
+      "initial_savings": {
+        "min": 200,
+        "max": 400
+      },
+      "block_count": 3,
+      "transactions_per_block": 64,
+      "mix": [
+        {
+          "type": "balance",
+          "weight": 15,
+          "access": {
+            "kind": "hotspot",
+            "hot_accounts": 4,
+            "hot_probability": 0.9
+          },
+          "compute": {
+            "min_units": 32,
+            "max_units": 128,
+            "prefix_fraction": 0.5
+          }
+        },
+        {
+          "type": "deposit_checking",
+          "weight": 15,
+          "access": {
+            "kind": "hotspot",
+            "hot_accounts": 4,
+            "hot_probability": 0.9
+          },
+          "compute": {
+            "min_units": 32,
+            "max_units": 128,
+            "prefix_fraction": 0.5
+          },
+          "amount": 5
+        },
+        {
+          "type": "transact_savings",
+          "weight": 15,
+          "access": {
+            "kind": "hotspot",
+            "hot_accounts": 4,
+            "hot_probability": 0.9
+          },
+          "compute": {
+            "min_units": 32,
+            "max_units": 128,
+            "prefix_fraction": 0.5
+          },
+          "amount": -3
+        },
+        {
+          "type": "send_payment",
+          "weight": 25,
+          "access": {
+            "kind": "hotspot",
+            "hot_accounts": 4,
+            "hot_probability": 0.9
+          },
+          "compute": {
+            "min_units": 32,
+            "max_units": 128,
+            "prefix_fraction": 0.5
+          },
+          "amount": 5
+        },
+        {
+          "type": "amalgamate",
+          "weight": 15,
+          "access": {
+            "kind": "hotspot",
+            "hot_accounts": 4,
+            "hot_probability": 0.9
+          },
+          "compute": {
+            "min_units": 32,
+            "max_units": 128,
+            "prefix_fraction": 0.5
+          }
+        },
+        {
+          "type": "write_check",
+          "weight": 15,
+          "access": {
+            "kind": "hotspot",
+            "hot_accounts": 4,
+            "hot_probability": 0.9
+          },
+          "compute": {
+            "min_units": 32,
+            "max_units": 128,
+            "prefix_fraction": 0.5
+          },
+          "amount": 5
+        },
+        {
+          "type": "check_funds",
+          "weight": 20,
+          "access": {
+            "kind": "hotspot",
+            "hot_accounts": 4,
+            "hot_probability": 0.9
+          },
+          "compute": {
+            "min_units": 32,
+            "max_units": 128,
+            "prefix_fraction": 0.5
+          },
+          "amount": 150
+        }
+      ]
+    }
+  },
+  "statistical_protocol": "configs/statistical/protocol-v1.json",
+  "warmup_rounds": 1,
+  "measurement_rounds": 3,
+  "order_seed": 20260802,
+  "timeout": "2m",
+  "environment": {
+    "affinity": "uncontrolled_smoke",
+    "numa_policy": "uncontrolled_smoke",
+    "state_reset": "fresh_state_from_frozen_artifact",
+    "page_cache": "unchanged_and_recorded_as_smoke",
+    "process_reuse": "fresh_process_per_run"
+  },
+  "cases": [
+    {
+      "id": "runtime",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_source": "runtime_observed",
+      "dependency_representation": "version_only",
+      "dependency_representation_builder": "none",
+      "dependency_wait_policy": "none",
+      "dependency_estimate_injection": "disabled",
+      "dependency_dispatch": "index_order",
+      "estimate_read_policy": "abort_and_reschedule",
+      "idle_wait_policy": "park",
+      "trace_mode": "counters"
+    },
+    {
+      "id": "direct-ready",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_source": "static_program",
+      "dependency_representation": "raw_last_writer",
+      "dependency_representation_builder": "indexed_by_key",
+      "dependency_wait_policy": "direct_predecessor_wait",
+      "dependency_estimate_injection": "disabled",
+      "dependency_dispatch": "ready_queue",
+      "estimate_read_policy": "abort_and_reschedule",
+      "idle_wait_policy": "park",
+      "trace_mode": "counters"
+    },
+    {
+      "id": "estimate-abort",
+      "engine": "blockstm",
+      "policy": "blockstm_preset",
+      "executors": 8,
+      "max_speculative_inflight": 0,
+      "dependency_mode": "mvcc_runtime",
+      "dependency_source": "static_program",
+      "dependency_representation": "raw_last_writer",
+      "dependency_representation_builder": "indexed_by_key",
+      "dependency_wait_policy": "none",
+      "dependency_estimate_injection": "write_estimates",
+      "dependency_dispatch": "index_order",
+      "estimate_read_policy": "abort_and_reschedule",
+      "idle_wait_policy": "park",
+      "trace_mode": "counters"
+    }
+  ],
+  "output": {
+    "validation_records": "results/runs/smallbank-smoke/validation.jsonl",
+    "run_records": "results/runs/smallbank-smoke/runs.jsonl",
+    "action_traces": "results/runs/smallbank-smoke/action-traces.jsonl"
+  }
+}

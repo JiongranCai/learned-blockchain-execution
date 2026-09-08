@@ -158,6 +158,44 @@ func TestExecuteFailureSemantics(t *testing.T) {
 	}
 }
 
+func TestRegisterAssignmentAndAddition(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		left, right, delta, want int64
+		status                   model.TxStatus
+	}{
+		{"sum and constant", 7, 5, -2, 10, model.TxStatusSuccess},
+		{"negative operand", 7, -5, 0, 2, model.TxStatusSuccess},
+		{"overflow", math.MaxInt64, 1, 0, 0, model.TxStatusArithmeticError},
+		{"underflow", math.MinInt64, -1, 0, 0, model.TxStatusArithmeticError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storage := mustState(t, []model.StateEntry{{Key: []byte("a"), Value: flat.EncodeInt64(tc.left)}, {Key: []byte("b"), Value: flat.EncodeInt64(tc.right)}})
+			addend := model.Register("b")
+			tx := model.Transaction{ID: tc.name, MaxUnits: 4, Program: model.Program{Instructions: []model.Instruction{
+				{Op: model.OpRead, Key: []byte("a"), Register: "a"},
+				{Op: model.OpRead, Key: []byte("b"), Register: "b"},
+				{Op: model.OpAssign, Register: "sum", Expression: model.Expression{Base: model.Register("a"), Addend: &addend, Delta: tc.delta}},
+				{Op: model.OpReturn, Expression: model.Expression{Base: model.Register("sum")}},
+			}}}
+			got := flat.New().Execute(context.Background(), 0, tx, state.NewOverlay(storage))
+			if got.Status != tc.status || len(got.Reads) != 2 || len(got.Writes) != 0 {
+				t.Fatalf("unexpected assignment result: %+v", got)
+			}
+			if tc.status == model.TxStatusSuccess {
+				if v, _ := flat.DecodeInt64(got.ReturnValue); v != tc.want {
+					t.Fatalf("got %d, want %d", v, tc.want)
+				}
+			}
+			bad := model.Operand{Kind: "invalid"}
+			tx.Program.Instructions[2].Expression.Addend = &bad
+			if code := flat.New().Validate(tx); code != flat.ErrorInvalidOperand {
+				t.Fatal("invalid addend accepted")
+			}
+		})
+	}
+}
+
 func TestExecuteMissingReadAndExistsCondition(t *testing.T) {
 	storage := memkv.New()
 	view := state.NewOverlay(storage)

@@ -8,6 +8,87 @@
 
 Finite-window telemetry records effective L, peak admitted positions beyond the stable prefix, and worker admission-stall events/time. This occupancy includes pending and validating transactions; it is not a count of running workers. `L=0` and `L>=W` use the existing full-window path, where exact occupancy/stall telemetry is unavailable.
 
+## SmallBank workloads
+
+`workload.smallbank` selects `smallbank-v1`, producing the existing
+`workload-artifact-v3`. Set exactly one workload source: `smallbank`, `synthetic`,
+or `artifact_path`. [smallbank-smoke.json](experiments/workload/smallbank-smoke.json)
+is a complete, inexpensive example for local `bench validate`.
+
+Each account has two integer balances, stored at `checking/<account-id>` and
+`savings/<account-id>` (IDs are zero-padded to eight digits). Transactions receive
+account IDs directly; there is no SQL name lookup or blockchain VM. Conflict
+granularity is one balance field. The semantics follow the SmallBank descriptions
+in [Vandevoort et al., §2](https://www.vldb.org/pvldb/vol14/p2141-vandevoort.pdf)
+and the six-transaction workload in
+[Zhu et al., §5.2](https://www.usenix.org/system/files/conference/atc18/atc18-zhu.pdf).
+This is a semantic port to the existing flat runtime, with the following explicit
+choices for money units, return values and insufficient funds:
+
+| `type` | Behavior |
+| --- | --- |
+| `balance` | Read Checking and Savings; return their sum. |
+| `deposit_checking` | Add positive `amount` to Checking. |
+| `transact_savings` | Add signed `amount` to Savings; fail if the resulting balance would be negative. |
+| `send_payment` | Move positive `amount` from A's Checking to B's Checking; fail if A cannot pay. A and B are distinct. |
+| `amalgamate` | Add all of A's Checking + Savings to B's Checking, then zero both balances of A. A and B are distinct. |
+| `write_check` | Subtract positive `amount` from Checking, plus one extra money unit if Checking + Savings is below `amount`. Checking may become negative. |
+| `check_funds` | **Selective extension:** read Checking; only if it is below positive `amount`, read Savings too. Return 1 if sufficient, otherwise 0. Both outcomes are successful, read-only transactions. |
+
+Mutating transactions return 0 on success. Business failures publish no writes;
+the runtime's existing checked integer arithmetic and atomic rollback also apply.
+The only runtime additions are register assignment and adding two register values,
+needed for balance arithmetic; CPU-cost instructions retain their original meaning.
+
+The generator configuration contains:
+
+- `seed`, `accounts`, `initial_checking: {min, max}` and
+  `initial_savings: {min, max}`. Initial balances are sampled uniformly from
+  inclusive, nonnegative integer ranges; equal bounds give fixed balances.
+- `block_count` and `transactions_per_block`, defining the length and partition
+  of an ordered transaction stream.
+- `mix`, whose entries contain positive `weight`, `type`, `access`, `compute`,
+  and `amount` where applicable. Amount is fixed per entry; multiple entries of
+  the same type can have different amounts, costs or access distributions.
+
+Each transaction independently samples a mix entry in proportion to its weight,
+then its account(s) and CPU cost. Access uses the shared uniform/hotspot/finite-Zipf
+sampler described below; SmallBank calls the hot-set size `hot_accounts`.
+All entries share the same account namespace and first-H hot set. Two-account
+transactions sample without replacement. Account count and access skew control
+contention; the combined weight of mutating types controls the **expected fraction
+of write transactions**, which is distinct from the fraction of operations that
+are writes or the realized successful-write rate.
+
+`compute: {min_units, max_units, prefix_fraction}` uses the same cost sampler as
+synthetic workloads. The prefix runs before the first state read, and the suffix
+after the required reads. Both instructions remain in the program at zero cost.
+`CheckFunds` joins both paths before a common suffix, so skipping Savings changes
+accesses without changing configured CPU work. An insufficient-funds
+`SendPayment` returns after reading the sender, skipping the receiver and suffix;
+fixed configured total cost therefore does not guarantee equal paid work for
+failed transactions. Prefix placement extends the after-read cost model used in
+[AdaChain, §7.1](https://www.vldb.org/pvldb/vol16/p2033-wu.pdf).
+
+The full conditional program is generated, including unexecuted branches.
+`CheckFunds`' static read set is `{Checking, Savings}`, while its actual set can
+be `{Checking}`. Its write set is always empty. Mixing it with Savings writers
+exposes false RAW predecessors for Direct, while Estimate can proceed when the
+transaction never reads the marked Savings key. Branch choice follows the balance
+observed during execution, including
+reexecution; it is not resolved from initial state during generation. The amount
+threshold and balance distribution control selectivity indirectly, so mixed
+SmallBank runs must report actual accesses rather than assume a fixed branch rate.
+
+The stream currently uses one stationary sampling configuration. Committed state
+continues across blocks; a new run starts from the same initial state. Separate
+RNGs govern initial balances, accounts, costs and mixture selection. Changing only
+costs preserves transactions and order; changing block size while preserving total
+transaction count only repartitions that order. Logical arrivals specify order,
+not wall-clock pacing. `transactions_per_block` controls block size; this executor
+benchmark does not yet model AdaChain's client arrival rate, admission queues or
+consensus. Workload generation is outside the measured interval.
+
 ## Synthetic workloads
 
 `workload.synthetic` contains `seed`, `initial_keys`, `key_space`, `block_count`,
@@ -149,6 +230,45 @@ Reproducibility records retain the Git revision and modified flag, config path, 
 Smoke matrices may use fewer rounds, but their records remain pilot evidence and cannot be pooled with formal data.
 
 ## Experiment families
+
+`scripts/run_smallbank_experiment.py RUN_DIR --stage pilot|repeated` prepares the
+SmallBank CQ3 comparison with `P=8`, `GOMAXPROCS=8`, `L=W`, and the existing
+Runtime / Direct-ready / Estimate-abort candidates. It reuses the existing runner
+and paired analysis. Every matrix has 10,000 accounts and four consecutive blocks
+of 1,536 transactions. One run measures the entire stream, resetting state before
+the next run. Per-block timing remains in the raw records.
+
+| Profile family | Controlled comparisons |
+| --- | --- |
+| Standard (4 profiles) | Six-type weights 15/15/15/25/15/15 in table order above; uniform or 95% hot-8 access, 100k configured units with 0% or 90% prefix. Initial Checking/Savings = 1M. |
+| Contention (6 profiles) | 5% hot DepositChecking with 1M suffix, 45% hot DepositChecking followers, 50% cold Balance with 100k suffix. Hot set 2 or 8; follower `(prefix,suffix)` = `(0,100k)`, `(90k,10k)`, `(400k,100k)`. Compare fixed-total placement and fixed-suffix scaling. Roles are sampled, without forced predecessor order. |
+| Selective (6 profiles) | 25% hot TransactSavings (+1, 1M suffix), 75% hot CheckFunds (100k total, 0%/90% prefix), hot set 8. Checking stays in its initial range 100–199; Savings starts at 1M. Thresholds 50/150/200 give skip/mixed/read Savings paths. The mixed rate depends on sampled balances; neither return value nor business failure is varied here. |
+
+Pilot uses seed 131 and 1/3 warmup/measurement rounds (16 matrices). Repeated
+exploration uses seeds 137/13737/1373737 and 3/30 rounds (48 matrices). All costs
+are CPU units, not durations. These profiles are starting points for finding
+advantages, not a claim that either policy wins. The original synthetic selective
+and HDU diagnostics remain available. Finite L is supported by the same SmallBank
+inputs, but this first suite holds L fixed to isolate CQ3.
+
+Run on the Linux experiment host after selecting its CPU binding, for example:
+
+```sh
+numactl --physcpubind=2-9 --membind=0 python3 scripts/run_smallbank_experiment.py results/runs/my-smallbank-run --stage pilot
+numactl --physcpubind=2-9 --membind=0 python3 scripts/run_smallbank_experiment.py results/runs/my-smallbank-run --stage repeated
+```
+
+The results directory contains generated configs, binary, environment notes, raw
+records, `summary.csv` and `comparisons.csv`. `--notes` records host conditions;
+`--summarize-only` rebuilds the CSVs. Alongside time, retries, discarded work and
+planning/deferral counters, SmallBank summaries include successful/failed
+transactions, successful goodput, `final_read_operations`, and `static_read_keys`
+(blank for Runtime). Final reads include the final incarnation of semantic
+failures and exclude abandoned speculative attempts. SmallBank reads each key
+at most once per transaction, so these counts can be compared with static read
+keys summed over transactions. `static_read_keys - final_read_operations` measures
+access overestimation, not false-edge count or time saved. Full-mix business
+failures and branch frequencies can evolve as balances change across blocks.
 
 `scripts/run_workload_prefix_experiment.py` compares Runtime, Direct-ready, and Estimate-abort at `P=8`, `L=W` across five workload profiles, two compute costs, and prefix fractions `0/0.5/1`. Run it on the Linux server with eight physical cores selected from that host's topology, for example:
 

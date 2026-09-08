@@ -14,6 +14,7 @@ import (
 	engineapi "github.com/crypto-org-chain/go-block-stm/internal/engine"
 	"github.com/crypto-org-chain/go-block-stm/internal/policy/fixed"
 	"github.com/crypto-org-chain/go-block-stm/internal/telemetry"
+	"github.com/crypto-org-chain/go-block-stm/internal/workload/smallbank"
 	"github.com/crypto-org-chain/go-block-stm/internal/workload/synthetic"
 )
 
@@ -39,6 +40,7 @@ type Config struct {
 type WorkloadConfig struct {
 	ArtifactPath string            `json:"artifact_path,omitempty"`
 	Synthetic    *synthetic.Config `json:"synthetic,omitempty"`
+	SmallBank    *smallbank.Config `json:"smallbank,omitempty"`
 }
 
 type CaseConfig struct {
@@ -131,8 +133,18 @@ func (c *Config) validate() (time.Duration, error) {
 	if c.RunClass != "smoke" && c.RunClass != "formal" {
 		return invalid("run_class must be smoke or formal")
 	}
-	if (c.Workload.ArtifactPath == "") == (c.Workload.Synthetic == nil) {
-		return invalid("workload must set exactly one of artifact_path or synthetic")
+	sources := 0
+	if c.Workload.ArtifactPath != "" {
+		sources++
+	}
+	if c.Workload.Synthetic != nil {
+		sources++
+	}
+	if c.Workload.SmallBank != nil {
+		sources++
+	}
+	if sources != 1 {
+		return invalid("workload must set exactly one of artifact_path, synthetic or smallbank")
 	}
 	if c.StatisticalProtocol == "" {
 		return invalid("statistical_protocol is required")

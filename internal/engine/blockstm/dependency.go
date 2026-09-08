@@ -236,7 +236,7 @@ func analyzeStaticPrograms(ctx context.Context, block model.Block) ([]staticAcce
 			case model.OpWrite, model.OpDelete:
 				writes[string(instruction.Key)] = struct{}{}
 				acquisition.bytes += uint64(len(instruction.Key))
-			case model.OpCompute, model.OpFailIf, model.OpJumpIf, model.OpReturn:
+			case model.OpCompute, model.OpAssign, model.OpFailIf, model.OpJumpIf, model.OpReturn:
 				// These flat-runtime instructions perform no hidden state access.
 			default:
 				// A future/unknown opcode may access state dynamically. Static

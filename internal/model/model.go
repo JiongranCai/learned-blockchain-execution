@@ -8,6 +8,7 @@ const (
 	OpWrite   Opcode = "write"
 	OpDelete  Opcode = "delete"
 	OpCompute Opcode = "compute"
+	OpAssign  Opcode = "assign"
 	OpFailIf  Opcode = "fail_if"
 	OpJumpIf  Opcode = "jump_if"
 	OpReturn  Opcode = "return"
@@ -35,10 +36,12 @@ func Register(name string) Operand {
 	return Operand{Kind: OperandRegister, Register: name}
 }
 
-// Expression evaluates Base and then adds Delta with checked int64 arithmetic.
+// Expression evaluates Base + Addend (when present) + Delta, left to right,
+// with checked int64 arithmetic.
 type Expression struct {
-	Base  Operand `json:"base"`
-	Delta int64   `json:"delta,omitempty"`
+	Base   Operand  `json:"base"`
+	Addend *Operand `json:"addend,omitempty"`
+	Delta  int64    `json:"delta,omitempty"`
 }
 
 // ConditionKind identifies a deterministic boolean predicate.

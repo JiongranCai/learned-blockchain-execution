@@ -55,9 +55,19 @@ func (r *Runtime) Validate(tx model.Transaction) string {
 			if instruction.Register == "" {
 				return ErrorMissingRegisterName
 			}
+		case model.OpAssign:
+			if instruction.Register == "" {
+				return ErrorMissingRegisterName
+			}
+			fallthrough
 		case model.OpWrite, model.OpReturn:
 			if code := validateOperand(instruction.Expression.Base); code != "" {
 				return code
+			}
+			if addend := instruction.Expression.Addend; addend != nil {
+				if code := validateOperand(*addend); code != "" {
+					return code
+				}
 			}
 		case model.OpDelete, model.OpCompute:
 		case model.OpFailIf:
@@ -209,6 +219,15 @@ func (r *Runtime) ExecuteWithHooks(
 			view.Set(instruction.Key, EncodeInt64(value))
 			pc++
 
+		case model.OpAssign:
+			value, code := evaluateExpression(instruction.Expression, registers)
+			if code != "" {
+				setEvaluationError(&result, code)
+				return result
+			}
+			registers[instruction.Register] = registerValue{value: value, exists: true}
+			pc++
+
 		case model.OpDelete:
 			ordinal++
 			hookContext := execution
@@ -351,13 +370,27 @@ func evaluateExpression(
 	if code != "" {
 		return 0, code
 	}
-	if expression.Delta > 0 && base > math.MaxInt64-expression.Delta {
+	if expression.Addend != nil {
+		addend, code := evaluateOperand(*expression.Addend, registers)
+		if code != "" {
+			return 0, code
+		}
+		base, code = checkedAdd(base, addend)
+		if code != "" {
+			return 0, code
+		}
+	}
+	return checkedAdd(base, expression.Delta)
+}
+
+func checkedAdd(base, delta int64) (int64, string) {
+	if delta > 0 && base > math.MaxInt64-delta {
 		return 0, ErrorArithmeticOverflow
 	}
-	if expression.Delta < 0 && base < math.MinInt64-expression.Delta {
+	if delta < 0 && base < math.MinInt64-delta {
 		return 0, ErrorArithmeticOverflow
 	}
-	return base + expression.Delta, ""
+	return base + delta, ""
 }
 
 func evaluateOperand(operand model.Operand, registers map[string]registerValue) (int64, string) {

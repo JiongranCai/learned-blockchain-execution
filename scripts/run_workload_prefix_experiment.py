@@ -175,6 +175,12 @@ def summarize(stage_dir, suite="placement", describe=describe_synthetic):
             row["planning_ms"] = med((r["metrics"]["dependency"]["acquisition_ns"] +
                                       r["metrics"]["dependency"]["representation_ns"]) / 1e6
                                      for r in case_records)
+            if suite == "smallbank":
+                for key in ("transactions", "successful_transactions", "failed_transactions",
+                            "final_read_operations", "committed_goodput_per_second"):
+                    row[key] = med(r["metrics"][key] for r in case_records)
+                row["static_read_keys"] = (med(r["metrics"]["dependency"]["static_read_keys"]
+                    for r in case_records) if policy != "runtime" else None)
             if suite == "workers":
                 row.update(policy=policy, workers=case_records[0]["case"]["executors"])
                 hardware = case_records[0]["provenance"]["hardware"]
